@@ -1,0 +1,2420 @@
+<?php
+$cfgPath = '/boot/config/plugins/unraid-backup-tools/flash-backup/settings.cfg';
+
+$defaults = [
+    'BACKUP_DESTINATION'   => '',
+    'BACKUP_OWNER'         => 'nobody',
+    'BACKUPS_TO_KEEP'      => '0',
+    'DRY_RUN'              => 'no',
+    'MINIMAL_BACKUP'       => 'no',
+    'NOTIFICATION_SERVICE' => '',
+    'NOTIFICATIONS'        => 'no',
+    'PUSHOVER_USER_KEY'    => '',
+    'WEBHOOK_DISCORD'      => '',
+    'WEBHOOK_GOTIFY'       => '',
+    'WEBHOOK_NTFY'         => '',
+    'WEBHOOK_PUSHOVER'     => '',
+    'WEBHOOK_SLACK'        => '',
+];
+
+$existing = [];
+if (file_exists($cfgPath)) {
+    $existing = parse_ini_file($cfgPath) ?: [];
+}
+foreach ($defaults as $key => $value) {
+    if (!array_key_exists($key, $existing)) {
+        $existing[$key] = $value;
+    }
+}
+$configText = '';
+foreach ($defaults as $key => $defaultValue) {
+    $val = $existing[$key];
+    $configText .= "$key=\"$val\"\n";
+}
+@file_put_contents($cfgPath, $configText);
+$settings = $existing;
+?>
+
+<?php
+$remoteCfgPath = '/boot/config/plugins/unraid-backup-tools/flash-backup/settings_remote.cfg';
+
+$remoteDefaults = [
+    'B2_BUCKET_NAME'              => '',
+    'BACKUPS_TO_KEEP_REMOTE'      => '0',
+    'DRY_RUN_REMOTE'              => 'no',
+    'MINIMAL_BACKUP_REMOTE'       => 'no',
+    'NOTIFICATION_SERVICE_REMOTE' => '',
+    'NOTIFICATIONS_REMOTE'        => 'no',
+    'PUSHOVER_USER_KEY_REMOTE'    => '',
+    'RCLONE_CONFIG_REMOTE'        => '',
+    'REMOTE_PATH_IN_CONFIG'       => '/Flash_Backups',
+    'WEBHOOK_DISCORD_REMOTE'      => '',
+    'WEBHOOK_GOTIFY_REMOTE'       => '',
+    'WEBHOOK_NTFY_REMOTE'         => '',
+    'WEBHOOK_PUSHOVER_REMOTE'     => '',
+    'WEBHOOK_SLACK_REMOTE'        => '',
+];
+
+$existingRemote = [];
+if (file_exists($remoteCfgPath)) {
+    $existingRemote = parse_ini_file($remoteCfgPath) ?: [];
+}
+foreach ($remoteDefaults as $key => $value) {
+    if (!array_key_exists($key, $existingRemote)) {
+        $existingRemote[$key] = $value;
+    }
+}
+$remoteConfigText = '';
+foreach ($remoteDefaults as $key => $defaultValue) {
+    $val = $existingRemote[$key];
+    $remoteConfigText .= "$key=\"$val\"\n";
+}
+@file_put_contents($remoteCfgPath, $remoteConfigText);
+$remotesettings = $existingRemote;
+?>
+
+<?php
+$unraid_version = "7.2";
+if (file_exists("/etc/unraid-version")) {
+    $data = parse_ini_file("/etc/unraid-version");
+    if (!empty($data["version"])) $unraid_version = $data["version"];
+}
+?>
+
+<script>
+  let csrfToken = "<?= $_GET['csrf_token'] ?? ($_COOKIE['csrf_token'] ?? '') ?>";
+  if (!csrfToken || csrfToken === "undefined" || csrfToken === "") {
+    try {
+      if (typeof window.csrf_token !== "undefined" && window.csrf_token) csrfToken = window.csrf_token;
+      if ((!csrfToken || csrfToken === "") && document.querySelector("meta[name='csrf_token']"))
+        csrfToken = document.querySelector("meta[name='csrf_token']").getAttribute("content");
+      if ((!csrfToken || csrfToken === "") && document.cookie.includes("csrf_token=")) {
+        const m = document.cookie.match(/csrf_token=([^;]+)/);
+        if (m) csrfToken = decodeURIComponent(m[1]);
+      }
+      if ((!csrfToken || csrfToken === "") && window.parent) {
+        try { if (window.parent.csrf_token) csrfToken = window.parent.csrf_token; } catch (e) { }
+      }
+    } catch (err) { console.warn("CSRF token discovery failed:", err); }
+  }
+</script>
+
+<style>
+  :root {
+    --primary-blue: #2ECC40;
+  }
+
+  .flash-backup-wrapper {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    min-width: 0;
+  }
+
+  #log-section {
+    background: #111;
+    border-radius: 12px;
+    box-shadow: 0 0 12px rgba(46, 204, 64, .3);
+    color: #f0f8ff;
+    padding: 20px;
+    flex: 1 1 auto;
+    height: auto;
+    max-height: 73vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding-top: 0;
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  #flash-backup-settings-remote,
+  #flash-backup-settings {
+    background: #111;
+    border-radius: 12px;
+    box-shadow: 0 0 12px rgba(46, 204, 64, .3);
+    color: #f0f8ff;
+    padding: 16px !important;
+    flex: 1 1 auto;
+    height: auto;
+    max-height: none;
+    overflow: visible;
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+    flex-basis: 25%;
+  }
+
+  .unraid-71 #flash-backup-settings {
+    min-height: 77vh;
+    max-height: 77vh;
+    overflow-y: auto;
+    margin: 0;
+  }
+
+  .unraid-71 #log-section pre {
+    max-height: 68vh;
+    overflow-y: auto;
+    margin: 0;
+  }
+
+  .unraid-72 #flash-backup-settings {
+    min-height: 76vh;
+    max-height: 76vh;
+    overflow-y: auto;
+    margin: 0;
+  }
+
+  .unraid-72 #log-section pre {
+    max-height: 67vh;
+    overflow-y: auto;
+    margin: 0;
+  }
+
+  #flash-backup-settings {
+    flex: 1 1 100%;
+  }
+
+  label {
+    color: var(--primary-blue);
+    font-weight: bold;
+    margin-bottom: 5px;
+  }
+
+  input,
+  select {
+    background: #111;
+    border: 1px solid var(--primary-blue);
+    border-radius: 5px;
+    color: #fff;
+    padding: 8px;
+  }
+
+  .unraid-71 .flash-backup-wrapper {
+    margin-top: -31px !important;
+  }
+
+  .unraid-72 .flash-backup-wrapper {
+    margin-top: -20px !important;
+  }
+
+  button {
+    border: none;
+    border-radius: 4px;
+    color: #fff;
+    cursor: pointer;
+    margin-right: 10px;
+    padding: 8px 15px;
+  }
+
+  input[type="checkbox"] {
+    accent-color: var(--primary-blue);
+    cursor: pointer;
+    height: 16px;
+    width: 16px;
+  }
+
+  .remote-status-row,
+  .status-row {
+    align-items: center;
+    display: flex;
+    margin-bottom: 6px;
+  }
+
+  .remote-status-label,
+  .status-label {
+    color: var(--primary-blue);
+    font-weight: bold;
+    width: 75px;
+  }
+
+  #version-text {
+    color: #fff;
+  }
+
+  .form-pair {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+    margin-bottom: 15px;
+    margin-top: 8px;
+  }
+
+  .input-wrapper {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+  }
+
+  .form-pair label {
+    width: 130px;
+    color: var(--primary-blue);
+    font-weight: bold;
+    text-align: left;
+    margin-right: 10px;
+  }
+
+  .form-pair input,
+  .form-pair select {
+    background: #111;
+    color: #fff;
+    width: 200px;
+    min-width: fit-content;
+    max-width: 100%;
+  }
+
+  .form-pair input[type="text"],
+  .form-pair input[type="password"] {
+    min-width: fit-content;
+    max-width: 100%;
+  }
+
+  .short-input {
+    flex: 0 0 auto;
+  }
+
+  @keyframes shake {
+
+    0%,
+    100% {
+      transform: translateX(0)
+    }
+
+    25% {
+      transform: translateX(-5px)
+    }
+
+    50% {
+      transform: translateX(5px)
+    }
+
+    75% {
+      transform: translateX(-5px)
+    }
+  }
+
+  #flash-backup-settings.shake {
+    animation: shake .3s;
+  }
+
+  .skipped-line {
+    color: #ffd700;
+  }
+
+  #last-run-log {
+    background: #111;
+    border: 1px solid var(--primary-blue);
+    border-radius: 8px;
+    color: white;
+    font-family: monospace;
+    font-size: 13px;
+    max-height: 66vh;
+    overflow-y: auto;
+    padding: 10px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    flex: 1;
+    margin-top: 0;
+    min-height: 0;
+  }
+
+  input[type="number"].short-input {
+    -moz-appearance: auto;
+    -webkit-appearance: auto;
+    appearance: auto;
+  }
+
+  input[type="number"] {
+    padding-right: 0;
+  }
+
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    margin: 0;
+    right: 0;
+    position: absolute;
+  }
+
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--primary-blue);
+    outline-offset: 2px;
+  }
+
+  button:hover,
+  input[type="checkbox"]:hover,
+  select:hover,
+  a:hover {
+    filter: brightness(1.1);
+  }
+
+  button:focus-visible,
+  input[type="checkbox"]:focus-visible,
+  select:focus-visible,
+  a:focus-visible {
+    outline: none;
+    box-shadow: none;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--primary-blue);
+    border-radius: 4px;
+  }
+
+  .vm-modal {
+    display: none;
+    position: fixed;
+    z-index: 9999;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.85);
+  }
+
+  .vm-modal-content {
+    width: 600px;
+    margin: 8% auto;
+    background: #000;
+    border: 2px solid #2ECC40;
+    border-radius: 8px;
+    color: #2ECC40;
+    padding: 15px;
+  }
+
+  .vm-modal-header {
+    display: flex;
+    justify-content: space-between;
+    font-weight: bold;
+    margin-bottom: 10px;
+  }
+
+  .vm-folder-list {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid #2ECC40;
+    padding: 5px;
+  }
+
+  .vm-folder-item {
+    padding: 6px;
+    cursor: pointer;
+  }
+
+  .vm-folder-item:hover {
+    background: #111;
+  }
+
+  .vm-folder-item label {
+    cursor: pointer;
+  }
+
+  .vm-breadcrumb {
+    margin-bottom: 10px;
+    font-size: 13px;
+    color: #2ECC40;
+  }
+
+  .vm-modal-footer {
+    margin-top: 10px;
+    text-align: right;
+  }
+
+  #folderPickerModal .vm-modal-header span {
+    color: #ffffff;
+  }
+
+  #backup_destination {
+    border: 1px solid #2ECC40 !important;
+    background-color: #111 !important;
+    color: #fff !important;
+    padding-left: 6px;
+    border-radius: 3px;
+  }
+
+  .log-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+  }
+
+  .log-header-row h3 {
+    color: var(--primary-blue);
+    font-size: 18px;
+    margin: 0;
+  }
+
+  input.invalid {
+    border-color: #2ECC40;
+    color: red;
+  }
+
+  #flash-backup-layout {
+    display: grid;
+    grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr) minmax(420px, 1.6fr);
+    gap: 20px;
+    width: 100%;
+    margin-top: 0;
+    padding-top: 0;
+    align-items: stretch;
+    --plugin-bg: #1e1e1e;
+    --plugin-panel: #111;
+    --plugin-border: #2ECC40;
+    --plugin-text: #e6e6e6;
+    --plugin-muted: #b0b0b0;
+    --plugin-accent: #2ECC40;
+  }
+
+  #flash-backup-layout select,
+  #flash-backup-layout input[type="text"],
+  #flash-backup-layout input[type="number"] {
+    background-color: var(--plugin-panel);
+    color: var(--plugin-text);
+    border: 1px solid var(--plugin-border);
+    border-radius: 6px;
+    padding: 6px 8px;
+  }
+
+  #flash-backup-layout label {
+    color: var(--primary-blue);
+  }
+
+  #flash-backup-layout input[type="checkbox"] {
+    accent-color: var(--plugin-accent);
+  }
+
+  #flash-backup-layout select option {
+    background-color: var(--plugin-panel);
+    color: var(--plugin-text);
+  }
+
+  #flash-backup-layout select:hover,
+  #flash-backup-layout input:hover {
+    border-color: var(--plugin-accent);
+  }
+
+  #flash-backup-layout select option:hover,
+  #flash-backup-layout select option:focus {
+    background-color: #e6231c;
+    color: #ffffff;
+  }
+
+  #flash-backup-layout select:disabled,
+  #flash-backup-layout input:disabled {
+    background-color: #111;
+    color: var(--plugin-muted);
+    border-color: #2ECC40;
+    cursor: not-allowed;
+  }
+
+  @media (max-width:1200px) {
+    #flash-backup-layout {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  @media (max-width:1100px) {
+    #flash-backup-layout {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width:800px) {
+    #flash-backup-layout {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  #flash-backup-settings h2,
+  #flash-backup-settings h3 {
+    margin-top: 0;
+    margin-bottom: 12px;
+  }
+
+  #flash-backup-settings {
+    padding-top: 16px !important;
+  }
+
+  #cron-warning-fields,
+  #cron-warning-minute,
+  #cron-warning-interval {
+    max-width: 360px;
+    width: 100%;
+    box-sizing: border-box;
+    word-wrap: break-word;
+    color: yellow;
+  }
+
+  #cron-warning-fields-remote,
+  #cron-warning-slash-remote {
+    max-width: 360px;
+    width: 100%;
+    box-sizing: border-box;
+    word-wrap: break-word;
+    color: yellow;
+  }
+
+  #logtoast,
+  #popupMessageremote,
+  #popupMessage {
+    display: none;
+    background: yellow;
+    color: #000;
+    padding: 6px 10px;
+    border-radius: 4px;
+    margin-top: 8px;
+    font-weight: bold;
+  }
+
+  .minimal-backup-label {
+    margin-left: 6px;
+    color: var(--primary-blue);
+    font-weight: bold;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    position: relative;
+    top: 3px;
+  }
+
+  .minimal-backup-label input[type="checkbox"] {
+    transform: scale(1.1);
+  }
+
+  .flash-multiselect {
+    display: block;
+    width: 200px;
+    height: 2.4em;
+    line-height: 2.4em;
+    border: 1px solid #2ECC40;
+    border-radius: 4px;
+    padding: 0 0.5em;
+    font-size: 1em;
+    background-color: #111;
+    box-sizing: border-box;
+    cursor: pointer;
+    position: relative;
+    min-width: 0;
+    max-width: 200px;
+  }
+
+  .flash-multiselect .selected-placeholder {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #fff;
+  }
+
+  .flash-multiselect .options-container {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    width: 100%;
+    border: 1px solid #2ECC40;
+    border-top: none;
+    background: #111;
+    color: #fff;
+    z-index: 10;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.6);
+  }
+
+  .flash-multiselect .options-actions {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5em;
+    padding: 0.3em 0.4em;
+    background: #0c0c0c;
+  }
+
+  .flash-multiselect .options-list {
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .flash-multiselect .options-actions button {
+    font-size: 0.85em;
+    padding: 0.15em 0.6em;
+    border: 1px solid #2ECC40;
+    background: #111;
+    color: #2ECC40;
+    border-radius: 13px;
+    cursor: pointer;
+    margin-right: 8px;
+  }
+
+  .flash-multiselect .options-actions button:hover {
+    background: #2ECC40;
+    color: #000;
+  }
+
+  .flash-multiselect .option {
+    padding: 0.35em 0.5em;
+    line-height: 1.6em;
+    cursor: pointer;
+  }
+
+  .flash-multiselect .option:hover {
+    background-color: #5a5959;
+  }
+
+  .flash-multiselect .option.selected {
+    background-color: #4aa555;
+    color: #fff;
+  }
+
+  .vm-multiselect {
+    position: relative;
+    width: 200px;
+    border: 1px solid #2ECC40;
+    padding: 6px;
+    background: #111;
+    cursor: pointer;
+    color: #111;
+    white-space: nowrap;
+    border-radius: 4px;
+  }
+
+  .vm-dropdown-label {
+    color: #fff;
+    user-select: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .vm-dropdown-list {
+    padding: 6px;
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    width: 100%;
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid #2ECC40;
+    background: #111;
+    color: #fff;
+    z-index: 10;
+    font-family: 'Segoe UI', sans-serif;
+  }
+
+  .vm-dropdown-list div {
+    padding: 4px 0;
+    text-align: left;
+    line-height: 1.5;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    color: white;
+  }
+
+  .vm-dropdown-list label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #fff;
+    padding-left: 0px;
+  }
+
+  .vm-dropdown-list input[type="checkbox"] {
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border: 1px solid #ccc;
+    background: #222;
+    cursor: pointer;
+    position: relative;
+    accent-color: #2ECC40;
+  }
+
+  .vm-dropdown-list input[type="checkbox"]:checked::after {
+    content: '✔';
+    position: absolute;
+    top: -2px;
+    left: 2px;
+    font-size: 14px;
+    color: #fff;
+  }
+
+  .vm-dropdown-list div:hover {
+    background: #111;
+  }
+
+  .flash-backup-schedules-table td {
+    padding-top: 2px !important;
+    padding-bottom: 2px !important;
+  }
+</style>
+
+<?php
+$plg = "/boot/config/plugins/unraid-backup-tools.plg";
+$version = "unknown";
+if (is_file($plg)) {
+    $xml = @simplexml_load_file($plg);
+    if ($xml && isset($xml['version'])) $version = (string)$xml['version'];
+}
+?>
+
+<script>
+  const SAVED_WEBHOOKS = {
+    DISCORD: "<?= htmlspecialchars($settings['WEBHOOK_DISCORD'] ?? '') ?>",
+    GOTIFY: "<?= htmlspecialchars($settings['WEBHOOK_GOTIFY'] ?? '') ?>",
+    NTFY: "<?= htmlspecialchars($settings['WEBHOOK_NTFY'] ?? '') ?>",
+    PUSHOVER: "<?= htmlspecialchars($settings['WEBHOOK_PUSHOVER'] ?? '') ?>",
+    SLACK: "<?= htmlspecialchars($settings['WEBHOOK_SLACK'] ?? '') ?>"
+  };
+  const SAVED_WEBHOOKS_REMOTE = {
+    DISCORD: "<?= htmlspecialchars($remotesettings['WEBHOOK_DISCORD_REMOTE'] ?? '') ?>",
+    GOTIFY: "<?= htmlspecialchars($remotesettings['WEBHOOK_GOTIFY_REMOTE'] ?? '') ?>",
+    NTFY: "<?= htmlspecialchars($remotesettings['WEBHOOK_NTFY_REMOTE'] ?? '') ?>",
+    PUSHOVER: "<?= htmlspecialchars($remotesettings['WEBHOOK_PUSHOVER_REMOTE'] ?? '') ?>",
+    SLACK: "<?= htmlspecialchars($remotesettings['WEBHOOK_SLACK_REMOTE'] ?? '') ?>"
+  };
+  const SAVED_PUSHOVER_USER_KEY = "<?= htmlspecialchars($settings['PUSHOVER_USER_KEY'] ?? '') ?>";
+  const SAVED_PUSHOVER_USER_KEY_REMOTE = "<?= htmlspecialchars($remotesettings['PUSHOVER_USER_KEY_REMOTE'] ?? '') ?>";
+</script>
+
+<div id="flash-backup-layout">
+  <div class="flash-backup-wrapper">
+    <form id="flash-backup-settings">
+
+      <div class="status-row">
+        <span title="Shows which part of the backup to local storage process is currently running"
+          class="flash-backuptip status-label">Status:</span>
+        <span id="status-text">Local Backup Not Running</span>
+      </div>
+      <br>
+
+      <div class="form-pair">
+        <label><span class="flash-backuptip" title="Choose destination for local backup">Backup
+            Destination:</span></label>
+        <span class="flash-backuptip" title="Choose destination for local backup">
+          <input type="text" id="backup_destination" name="BACKUP_DESTINATION"
+            data-picker-title="Select Backup Destination" placeholder="Click here" readonly style="cursor:pointer;"
+            value="<?php echo htmlspecialchars($settings['BACKUP_DESTINATION'] ?? ''); ?>">
+        </span>
+      </div>
+
+      <div class="form-pair">
+        <label for="backups_to_keep"><span title="Choose the amount of backups to keep for your local backups"
+            class="flash-backuptip">Backups To Keep:</span></label>
+        <span title="Choose the amount of backups to keep for your local backups" class="flash-backuptip">
+          <select id="backups_to_keep" class="short-input" name="BACKUPS_TO_KEEP">
+            <?php $current = $settings['BACKUPS_TO_KEEP'] ?? 0; for ($i = 0; $i <= 99; $i++) { $sel = ((int)$current===$i)?'selected':''; if($i===0) echo "<option value=\"0\" $sel>Unlimited</option>"; elseif($i===1) echo "<option value=\"1\" $sel>Only Latest</option>"; else echo "<option value=\"$i\" $sel>$i</option>"; } ?>
+          </select>
+        </span>
+      </div>
+
+      <div class="form-pair">
+        <label><span class="flash-backuptip"
+            title="Choose the owner for the local backup if you wanted it owned by one of your created users">Backup
+            Owner:</span></label>
+        <span class="flash-backuptip"
+          title="Choose the owner for the local backup if you wanted it owned by one of your created users">
+          <select id="backup_owner" name="BACKUP_OWNER"
+            data-selected="<?php echo htmlspecialchars($settings['BACKUP_OWNER'] ?? 'nobody'); ?>"></select>
+        </span>
+      </div>
+
+      <div class="form-pair">
+        <label for="dry_run"><span class="flash-backuptip" title="Enable to simulate the local backup">Dry
+            Run:</span></label>
+        <span class="flash-backuptip" title="Enable to simulate the local backup">
+          <select id="dry_run" class="short-input" name="DRY_RUN">
+            <option value="yes" <?=(($settings['DRY_RUN']??'no')==='yes' )?'selected':''?>>Yes</option>
+            <option value="no" <?=(($settings['DRY_RUN']??'no')==='no' )?'selected':''?>>No</option>
+          </select>
+        </span>
+      </div>
+
+      <div class="form-pair">
+        <label for="notifications"><span class="flash-backuptip"
+            title="Send notifications when flash backup to local storage starts and finishes">Notifications:</span></label>
+        <span class="flash-backuptip"
+          title="Send notifications when flash backup to local storage starts and finishes">
+          <select id="notifications" class="short-input" name="NOTIFICATIONS">
+            <option value="yes" <?=(($settings['NOTIFICATIONS']??'no')==='yes' )?'selected':''?>>Yes</option>
+            <option value="no" <?=(($settings['NOTIFICATIONS']??'no')==='no' )?'selected':''?>>No</option>
+          </select>
+        </span>
+      </div>
+
+      <div class="form-pair" id="notification-service-row" style="display:none;">
+        <label><span class="flash-backuptip"
+            title="Choose which notification service(s) to use">Service:</span></label>
+        <span>
+          <select id="notification_service_hidden" name="NOTIFICATION_SERVICE" multiple style="display:none;">
+            <?php $selSvcs = array_filter(explode(',', $settings['NOTIFICATION_SERVICE'] ?? '')); foreach (['Discord','Gotify','Ntfy','Pushover','Slack','Unraid'] as $svc): ?>
+            <option value="<?=$svc?>" <?=in_array($svc,$selSvcs)?'selected':''?>>
+              <?=$svc?>
+            </option>
+            <?php endforeach; ?>
+          </select>
+          <div id="notification_service" class="vm-multiselect flash-backuptip" style="width:200px;"
+            title="Choose which notification service(s) to use">
+            <div class="vm-dropdown-label" id="notification-service-label">Select service(s)</div>
+            <div class="vm-dropdown-list" id="notification-service-list" style="display:none;">
+              <?php foreach (['Discord','Gotify','Ntfy','Pushover','Slack','Unraid'] as $svc): ?>
+              <div><label><input type="checkbox" value="<?=$svc?>" <?=in_array($svc,$selSvcs)?'checked':''?>>
+                  <?=$svc?>
+                </label></div>
+              <?php endforeach; ?>
+            </div>
+          </div>
+        </span>
+      </div>
+
+      <div id="webhook-fields-container"></div>
+
+      <div class="form-pair" id="cron-expression-row">
+        <label for="cron_mode"><span class="flash-backuptip"
+            title="Select scheduling type">Scheduling:</span></label>
+        <div class="input-wrapper"><span class="flash-backuptip" title="Select scheduling type">
+            <select id="cron_mode" name="CRON_MODE" class="short-input">
+              <option value="minutes">Minutes</option>
+              <option value="hourly">Hourly</option>
+              <option value="daily" selected>Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+              <option value="custom">Custom</option>
+            </select>
+          </span></div>
+      </div>
+
+      <div id="minutes-options" style="display:none; margin-top:10px;">
+        <div class="form-pair"><label for="minutes_frequency"><span class="flash-backuptip"
+              title="Select minute frequency">Select Frequency:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select minute frequency">
+              <?php $freq=intval($settings['MINUTES_FREQUENCY']??'');if($freq<1)$freq=30;?><select
+                id="minutes_frequency" name="MINUTES_FREQUENCY" class="short-input">
+                <?php for($i=1;$i<=59;$i++){$s=($freq===$i)?'selected':'';echo "<option value=\"$i\" $s>Every $i Minutes</option>";}?>
+              </select>
+            </span></div>
+        </div>
+      </div>
+
+      <div id="hourly-options" style="display:none; margin-top:10px;">
+        <div class="form-pair"><label for="hourly_frequency"><span class="flash-backuptip"
+              title="Select hourly frequency">Select Frequency:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select hourly frequency"><select
+                id="hourly_frequency" name="HOURLY_FREQUENCY" class="short-input">
+                <?php for($i=1;$i<=23;$i++){$s=(($settings['HOURLY_FREQUENCY']??'')===(string)$i)?'selected':'';echo "<option value=\"$i\" $s>Every $i Hour".($i>1?'s':'')."</option>";}?>
+              </select></span></div>
+        </div>
+      </div>
+
+      <div id="daily-options" style="display:none; margin-top:10px;">
+        <div class="form-pair"><label for="daily_time"><span class="flash-backuptip"
+              title="Select the hour">Hour:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select the hour"><select id="daily_time"
+                name="DAILY_TIME" class="short-input">
+                <?php for($h=0;$h<24;$h++){$hr=str_pad($h,2,'0',STR_PAD_LEFT);echo "<option value=\"$hr\"".((($settings['DAILY_TIME']??'00')===$hr)?' selected':'').">$hr</option>";}?>
+              </select></span></div>
+        </div>
+        <div class="form-pair"><label for="daily_minute"><span class="flash-backuptip"
+              title="Select the minute">Minute:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select the minute"><select
+                id="daily_minute" name="DAILY_MINUTE" class="short-input">
+                <?php for($m=0;$m<60;$m++){$mn=str_pad($m,2,'0',STR_PAD_LEFT);echo "<option value=\"$mn\"".((($settings['DAILY_MINUTE']??'00')===$mn)?' selected':'').">$mn</option>";}?>
+              </select></span></div>
+        </div>
+      </div>
+
+      <div id="weekly-options" style="display:none; margin-top:10px;">
+        <div class="form-pair"><label for="weekly_day"><span class="flash-backuptip"
+              title="Select day of the week">Day Of Week:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select day of the week"><select
+                id="weekly_day" name="WEEKLY_DAY" class="short-input">
+                <?php foreach(["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"] as $day){echo "<option value=\"$day\"".((($settings['WEEKLY_DAY']??'')===$day)?' selected':'').">$day</option>";}?>
+              </select></span></div>
+        </div>
+        <div class="form-pair"><label for="weekly_time"><span class="flash-backuptip"
+              title="Select the hour">Hour:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select the hour"><select id="weekly_time"
+                name="WEEKLY_TIME" class="short-input">
+                <?php for($h=0;$h<24;$h++){$hr=str_pad($h,2,'0',STR_PAD_LEFT);echo "<option value=\"$hr\"".((($settings['WEEKLY_TIME']??'00')===$hr)?' selected':'').">$hr</option>";}?>
+              </select></span></div>
+        </div>
+        <div class="form-pair"><label for="weekly_minute"><span class="flash-backuptip"
+              title="Select the minute">Minute:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select the minute"><select
+                id="weekly_minute" name="WEEKLY_MINUTE" class="short-input">
+                <?php for($m=0;$m<60;$m++){$mn=str_pad($m,2,'0',STR_PAD_LEFT);echo "<option value=\"$mn\"".((($settings['WEEKLY_MINUTE']??'00')===$mn)?' selected':'').">$mn</option>";}?>
+              </select></span></div>
+        </div>
+      </div>
+
+      <div id="monthly-options" style="display:none; margin-top:10px;">
+        <div class="form-pair"><label for="monthly_day"><span class="flash-backuptip"
+              title="Select day of the month">Day Of Month:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select day of the month"><select
+                id="monthly_day" name="MONTHLY_DAY" class="short-input">
+                <?php for($d=1;$d<=31;$d++){$dy=str_pad($d,2,'0',STR_PAD_LEFT);echo "<option value=\"$dy\"".((($settings['MONTHLY_DAY']??'')===$dy)?' selected':'').">$dy</option>";}?>
+              </select></span></div>
+        </div>
+        <div class="form-pair"><label for="monthly_time"><span class="flash-backuptip"
+              title="Select the hour">Hour:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select the hour"><select
+                id="monthly_time" name="MONTHLY_TIME" class="short-input">
+                <?php for($h=0;$h<24;$h++){$hr=str_pad($h,2,'0',STR_PAD_LEFT);echo "<option value=\"$hr\"".((($settings['MONTHLY_TIME']??'00')===$hr)?' selected':'').">$hr</option>";}?>
+              </select></span></div>
+        </div>
+        <div class="form-pair"><label for="monthly_minute"><span class="flash-backuptip"
+              title="Select the minute">Minute:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select the minute"><select
+                id="monthly_minute" name="MONTHLY_MINUTE" class="short-input">
+                <?php for($m=0;$m<60;$m++){$mn=str_pad($m,2,'0',STR_PAD_LEFT);echo "<option value=\"$mn\"".((($settings['MONTHLY_MINUTE']??'00')===$mn)?' selected':'').">$mn</option>";}?>
+              </select></span></div>
+        </div>
+      </div>
+
+      <div id="custom-options" style="display:none; margin-top:10px;">
+        <div class="form-pair"><label for="custom_cron"><span class="flash-backuptip"
+              title="Enter a valid cron expression 5 fields with spaces between each for example */2 * * * * visit https://crontab.guru for help">Cron
+              Expression:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip"
+              title="Enter a valid cron expression 5 fields with spaces between each for example */2 * * * * visit https://crontab.guru for help"><input
+                type="text" id="custom_cron" name="CUSTOM_CRON" class="short-input" placeholder="*/2 * * * *"
+                value="<?php echo htmlspecialchars($settings['CUSTOM_CRON']??'');?>"></span></div>
+        </div>
+        <div class="form-pair">
+          <div id="cron-warning-fields" class="field-warning" role="alert" style="display:none;">⚠️ Enter a valid cron
+            expression with 5 fields separated by spaces. Only numbers, *, and / are allowed. Visit <a
+              href="https://crontab.guru/" target="_blank">crontab.guru</a> for help.</div>
+          <div id="cron-warning-slash" class="field-warning" role="alert" style="display:none;">⚠️ Fields using "/" must
+            be in the form */N (example: */5).</div>
+        </div>
+      </div>
+
+      <div id="backup-status" style="color:yellow; font-weight:bold; margin-bottom:6px; display:none;">Local or Remote
+        backup in progress!</div>
+
+      <div class="backup-actions">
+        <span title="Run backup of flash drive to local storage" class="flash-backuptip"><button type="button"
+            id="backupbtn">Backup Now</button></span>
+        <span class="flash-backuptip"
+          data-tooltip="Create a local backup schedule using the settings shown in the fields above"><button
+            type="button" id="schedule-local-backup" class="button schedule-button">Schedule It</button></span>
+        <span title="Cancel editing of schedule" class="flash-backuptip"><button type="button" id="cancelEditBtn"
+            style="display:none;">Cancel</button></span>
+        <label class="minimal-backup-label flash-backuptip"
+          title="Enable to have the local backup only include the config and extra folders, and the syslinux.cfg file">
+          <input type="checkbox" id="minimal_backup" name="MINIMAL_BACKUP" value="yes" <?php echo
+            (($settings['MINIMAL_BACKUP']??'no')==='yes' )?'checked':'';?>>
+          Minimal Backup
+        </label>
+      </div>
+
+      <div id="popupMessage"></div>
+    </form>
+  </div>
+
+  <div class="flash-backup-wrapper">
+    <form id="flash-backup-settings-remote">
+
+      <div class="status-row">
+        <span title="Shows which part of the backup to remote storage process is currently running"
+          class="flash-backuptip status-label">Status:</span>
+        <span id="status-text-remote">Remote Backup Not Running</span>
+      </div>
+      <br>
+
+      <?php
+      $rcloneConfig = '/boot/config/plugins/rclone/.rclone.conf';
+      $rcloneIni = []; $rcloneRemotes = []; $remoteTypes = [];
+      if (file_exists($rcloneConfig)) {
+          $rcloneIni = parse_ini_file($rcloneConfig, true, INI_SCANNER_RAW);
+          if (is_array($rcloneIni)) {
+              $rcloneRemotes = array_keys($rcloneIni);
+              sort($rcloneRemotes, SORT_NATURAL | SORT_FLAG_CASE);
+              foreach ($rcloneRemotes as $remote) {
+                  $type = $rcloneIni[$remote]['type'] ?? 'unknown';
+                  $remoteTypes[$remote] = $type;
+                  if ($type === 'crypt') {
+                      $underlying = $rcloneIni[$remote]['remote'] ?? '';
+                      $underlyingRemote = explode(':', $underlying)[0];
+                      if (($rcloneIni[$underlyingRemote]['type'] ?? '') === 'b2') $remoteTypes[$remote] = 'crypt-b2';
+                  }
+              }
+          }
+      }
+      $saved = $remotesettings['RCLONE_CONFIG_REMOTE'] ?? '';
+      $selectedRemotes = array_filter(array_map('trim', explode(',', $saved)));
+      ?>
+
+      <div class="form-pair">
+        <label><span class="flash-backuptip"
+            title="Choose which rclone config(s) to use for the remote backup">Rclone Config:</span></label>
+        <span class="form-input">
+          <select id="rclone_config_remote_hidden" name="RCLONE_CONFIG_REMOTE[]" multiple style="display:none;">
+            <?php foreach ($rcloneRemotes as $remote): ?>
+            <option value="<?=htmlspecialchars($remote)?>" <?=in_array($remote,$selectedRemotes,true)?'selected':''?>>
+              <?=htmlspecialchars($remote)?>
+            </option>
+            <?php endforeach; ?>
+          </select>
+          <div id="rclone_config_remote" class="flash-multiselect">
+            <span class="selected-placeholder">
+              <?=!empty($selectedRemotes)?implode(', ',$selectedRemotes):'Select config(s)'?>
+            </span>
+            <div class="options-container">
+              <div class="options-actions">
+                <button type="button" class="select-all">All</button>
+                <button type="button" class="clear-all">None</button>
+              </div>
+              <div class="options-list">
+                <?php foreach ($rcloneRemotes as $remote): ?>
+                <?php $type=$rcloneIni[$remote]['type']??'unknown';?>
+                <div class="option" data-value="<?=htmlspecialchars($remote)?>">
+                  <?=htmlspecialchars("$type - $remote")?>
+                </div>
+                <?php endforeach; ?>
+              </div>
+            </div>
+          </div>
+        </span>
+      </div>
+
+      <div class="form-pair" id="b2_bucket_row" style="display:none;">
+        <label><span class="flash-backuptip"
+            title="Required for Backblaze B2 remotes — the bucket name to upload into">B2 Bucketname:</span></label>
+        <span class="form-input"><input type="text" id="b2_bucket_name" name="B2_BUCKET_NAME" placeholder="/folder/"
+            autocomplete="off" value="<?=htmlspecialchars($remotesettings['B2_BUCKET_NAME']??'')?>"></span>
+      </div>
+
+      <div class="form-pair">
+        <label><span class="flash-backuptip"
+            title="Optional: subfolder where backups will be stored. If left empty /Flash_Backups/ will be used">Folder:</span></label>
+        <span class="flash-backuptip"
+          title="Optional: subfolder where backups will be stored. If left empty /Flash_Backups/ will be used">
+          <input type="text" name="REMOTE_PATH_IN_CONFIG" id="remote_path_in_config" placeholder="/folder/subfolder"
+            value="<?=htmlspecialchars($remotesettings['REMOTE_PATH_IN_CONFIG']??'')?>">
+        </span>
+      </div>
+
+      <div class="form-pair">
+        <label for="backups_to_keep_remote"><span title="Choose the amount of backups to keep for your remote backups"
+            class="flash-backuptip">Backups To Keep:</span></label>
+        <span title="Choose the amount of backups to keep for your remote backups" class="flash-backuptip">
+          <select id="backups_to_keep_remote" class="short-input" name="BACKUPS_TO_KEEP_REMOTE">
+            <?php $current=$remotesettings['BACKUPS_TO_KEEP_REMOTE']??0; for($i=0;$i<=99;$i++){$sel=((int)$current===$i)?'selected':''; if($i===0)echo "<option value=\"0\" $sel>Unlimited</option>"; elseif($i===1)echo "<option value=\"1\" $sel>Only Latest</option>"; else echo "<option value=\"$i\" $sel>$i</option>";}?>
+          </select>
+        </span>
+      </div>
+
+      <div class="form-pair">
+        <label for="dry_run_remote"><span class="flash-backuptip" title="Enable to simulate the remote backup">Dry
+            Run:</span></label>
+        <span class="flash-backuptip" title="Enable to simulate the remote backup">
+          <select id="dry_run_remote" class="short-input" name="DRY_RUN_REMOTE">
+            <option value="yes" <?=(($remotesettings['DRY_RUN_REMOTE']??'no')==='yes' )?'selected':''?>>Yes</option>
+            <option value="no" <?=(($remotesettings['DRY_RUN_REMOTE']??'no')==='no' )?'selected':''?>>No</option>
+          </select>
+        </span>
+      </div>
+
+      <div class="form-pair">
+        <label for="notifications_remote"><span class="flash-backuptip"
+            title="Send notifications when flash backup to remote storage starts and finishes">Notifications:</span></label>
+        <span class="flash-backuptip"
+          title="Send notifications when flash backup to remote storage starts and finishes">
+          <select id="notifications_remote" class="short-input" name="NOTIFICATIONS_REMOTE">
+            <option value="yes" <?=(($remotesettings['NOTIFICATIONS_REMOTE']??'no')==='yes' )?'selected':''?>>Yes
+            </option>
+            <option value="no" <?=(($remotesettings['NOTIFICATIONS_REMOTE']??'no')==='no' )?'selected':''?>>No</option>
+          </select>
+        </span>
+      </div>
+
+      <div class="form-pair" id="notification-service-row-remote" style="display:none;">
+        <label><span class="flash-backuptip"
+            title="Choose which notification service(s) to use">Service:</span></label>
+        <span>
+          <select id="notification_service_remote_hidden" name="NOTIFICATION_SERVICE_REMOTE" multiple
+            style="display:none;">
+            <?php $selSvcsR=array_filter(explode(',', $remotesettings['NOTIFICATION_SERVICE_REMOTE']??'')); foreach(['Discord','Gotify','Ntfy','Pushover','Slack','Unraid'] as $svc): ?>
+            <option value="<?=$svc?>" <?=in_array($svc,$selSvcsR)?'selected':''?>>
+              <?=$svc?>
+            </option>
+            <?php endforeach; ?>
+          </select>
+          <div id="notification_service_remote" class="vm-multiselect flash-backuptip" style="width:200px;"
+            title="Choose which notification service(s) to use">
+            <div class="vm-dropdown-label" id="notification-service-label-remote">Select service(s)</div>
+            <div class="vm-dropdown-list" id="notification-service-list-remote" style="display:none;">
+              <?php foreach(['Discord','Gotify','Ntfy','Pushover','Slack','Unraid'] as $svc): ?>
+              <div><label><input type="checkbox" value="<?=$svc?>" <?=in_array($svc,$selSvcsR)?'checked':''?>>
+                  <?=$svc?>
+                </label></div>
+              <?php endforeach; ?>
+            </div>
+          </div>
+        </span>
+      </div>
+
+      <div id="webhook-fields-container-remote"></div>
+
+      <div class="form-pair" id="cron-expression-row-remote">
+        <label for="cron_mode_remote"><span class="flash-backuptip"
+            title="Select scheduling selection">Scheduling:</span></label>
+        <div class="input-wrapper"><span class="flash-backuptip" title="Select scheduling selection">
+            <select id="cron_mode_remote" name="CRON_MODE_REMOTE" class="short-input">
+              <option value="minutes">Minutes</option>
+              <option value="hourly">Hourly</option>
+              <option value="daily" selected>Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+              <option value="custom">Custom</option>
+            </select>
+          </span></div>
+      </div>
+
+      <div id="minutes-options-remote" style="display:none; margin-top:10px;">
+        <div class="form-pair"><label for="minutes_frequency_remote"><span class="flash-backuptip"
+              title="Select minute frequency">Select Frequency:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select minute frequency">
+              <?php $freq=intval($remotesettings['MINUTES_FREQUENCY_REMOTE']??'');if($freq<1)$freq=30;?><select
+                id="minutes_frequency_remote" name="MINUTES_FREQUENCY_REMOTE" class="short-input">
+                <?php for($i=1;$i<=59;$i++){$s=($freq===$i)?'selected':'';echo "<option value=\"$i\" $s>Every $i Minutes</option>";}?>
+              </select>
+            </span></div>
+        </div>
+      </div>
+
+      <div id="hourly-options-remote" style="display:none; margin-top:10px;">
+        <div class="form-pair"><label for="hourly_frequency_remote"><span class="flash-backuptip"
+              title="Select hourly frequency">Select Frequency:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select hourly frequency"><select
+                id="hourly_frequency_remote" name="HOURLY_FREQUENCY_REMOTE" class="short-input">
+                <?php for($i=1;$i<=23;$i++){$s=(($remotesettings['HOURLY_FREQUENCY_REMOTE']??'')===(string)$i)?'selected':'';echo "<option value=\"$i\" $s>Every $i Hour".($i>1?'s':'')."</option>";}?>
+              </select></span></div>
+        </div>
+      </div>
+
+      <div id="daily-options-remote" style="display:none; margin-top:10px;">
+        <div class="form-pair"><label for="daily_time_remote"><span class="flash-backuptip"
+              title="Select the hour">Hour:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select the hour"><select
+                id="daily_time_remote" name="DAILY_TIME_REMOTE" class="short-input">
+                <?php for($h=0;$h<24;$h++){$hr=str_pad($h,2,'0',STR_PAD_LEFT);echo "<option value=\"$hr\"".((($remotesettings['DAILY_TIME_REMOTE']??'00')===$hr)?' selected':'').">$hr</option>";}?>
+              </select></span></div>
+        </div>
+        <div class="form-pair"><label for="daily_minute_remote"><span class="flash-backuptip"
+              title="Select the minute">Minute:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select the minute"><select
+                id="daily_minute_remote" name="DAILY_MINUTE_REMOTE" class="short-input">
+                <?php for($m=0;$m<60;$m++){$mn=str_pad($m,2,'0',STR_PAD_LEFT);echo "<option value=\"$mn\"".((($remotesettings['DAILY_MINUTE_REMOTE']??'00')===$mn)?' selected':'').">$mn</option>";}?>
+              </select></span></div>
+        </div>
+      </div>
+
+      <div id="weekly-options-remote" style="display:none; margin-top:10px;">
+        <div class="form-pair"><label for="weekly_day_remote"><span class="flash-backuptip"
+              title="Select day of the week">Day Of Week:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select day of the week"><select
+                id="weekly_day_remote" name="WEEKLY_DAY_REMOTE" class="short-input">
+                <?php foreach(["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"] as $day){echo "<option value=\"$day\"".((($remotesettings['WEEKLY_DAY_REMOTE']??'')===$day)?' selected':'').">$day</option>";}?>
+              </select></span></div>
+        </div>
+        <div class="form-pair"><label for="weekly_time_remote"><span class="flash-backuptip"
+              title="Select the hour">Hour:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select the hour"><select
+                id="weekly_time_remote" name="WEEKLY_TIME_REMOTE" class="short-input">
+                <?php for($h=0;$h<24;$h++){$hr=str_pad($h,2,'0',STR_PAD_LEFT);echo "<option value=\"$hr\"".((($remotesettings['WEEKLY_TIME_REMOTE']??'00')===$hr)?' selected':'').">$hr</option>";}?>
+              </select></span></div>
+        </div>
+        <div class="form-pair"><label for="weekly_minute_remote"><span class="flash-backuptip"
+              title="Select the minute">Minute:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select the minute"><select
+                id="weekly_minute_remote" name="WEEKLY_MINUTE_REMOTE" class="short-input">
+                <?php for($m=0;$m<60;$m++){$mn=str_pad($m,2,'0',STR_PAD_LEFT);echo "<option value=\"$mn\"".((($remotesettings['WEEKLY_MINUTE_REMOTE']??'00')===$mn)?' selected':'').">$mn</option>";}?>
+              </select></span></div>
+        </div>
+      </div>
+
+      <div id="monthly-options-remote" style="display:none; margin-top:10px;">
+        <div class="form-pair"><label for="monthly_day_remote"><span class="flash-backuptip"
+              title="Select day of the month">Day Of Month:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select day of the month"><select
+                id="monthly_day_remote" name="MONTHLY_DAY_REMOTE" class="short-input">
+                <?php for($d=1;$d<=31;$d++){$dy=str_pad($d,2,'0',STR_PAD_LEFT);echo "<option value=\"$dy\"".((($remotesettings['MONTHLY_DAY_REMOTE']??'')===$dy)?' selected':'').">$dy</option>";}?>
+              </select></span></div>
+        </div>
+        <div class="form-pair"><label for="monthly_time_remote"><span class="flash-backuptip"
+              title="Select the hour">Hour:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select the hour"><select
+                id="monthly_time_remote" name="MONTHLY_TIME_REMOTE" class="short-input">
+                <?php for($h=0;$h<24;$h++){$hr=str_pad($h,2,'0',STR_PAD_LEFT);echo "<option value=\"$hr\"".((($remotesettings['MONTHLY_TIME_REMOTE']??'00')===$hr)?' selected':'').">$hr</option>";}?>
+              </select></span></div>
+        </div>
+        <div class="form-pair"><label for="monthly_minute_remote"><span class="flash-backuptip"
+              title="Select the minute">Minute:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip" title="Select the minute"><select
+                id="monthly_minute_remote" name="MONTHLY_MINUTE_REMOTE" class="short-input">
+                <?php for($m=0;$m<60;$m++){$mn=str_pad($m,2,'0',STR_PAD_LEFT);echo "<option value=\"$mn\"".((($remotesettings['MONTHLY_MINUTE_REMOTE']??'00')===$mn)?' selected':'').">$mn</option>";}?>
+              </select></span></div>
+        </div>
+      </div>
+
+      <div id="custom-options-remote" style="display:none; margin-top:10px;">
+        <div class="form-pair"><label for="custom_cron_remote"><span class="flash-backuptip"
+              title="Enter a valid cron expression 5 fields with spaces between each for example */2 * * * * visit https://crontab.guru for help">Cron
+              Expression:</span></label>
+          <div class="input-wrapper"><span class="flash-backuptip"
+              title="Enter a valid cron expression 5 fields with spaces between each for example */2 * * * * visit https://crontab.guru for help"><input
+                type="text" id="custom_cron_remote" name="CUSTOM_CRON_REMOTE" class="short-input"
+                placeholder="*/2 * * * *"
+                value="<?php echo htmlspecialchars($remotesettings['CUSTOM_CRON_REMOTE']??'');?>"></span></div>
+        </div>
+        <div class="form-pair">
+          <div id="cron-warning-fields-remote" class="field-warning" role="alert" style="display:none;">⚠️ Enter a valid
+            cron expression with 5 fields separated by spaces. Only numbers, *, and / are allowed. Visit <a
+              href="https://crontab.guru/" target="_blank">crontab.guru</a> for help.</div>
+          <div id="cron-warning-slash-remote" class="field-warning" role="alert" style="display:none;">⚠️ Fields using
+            "/" must be in the form */N (example: */5).</div>
+        </div>
+      </div>
+
+      <div id="backup-status-remote" style="color:yellow; font-weight:bold; margin-bottom:6px; display:none;">Local or
+        Remote backup in progress!</div>
+
+      <div class="backup-actions">
+        <span title="Run remote backup" class="flash-backuptip"><button type="button" id="backupbtn_remote">Backup
+            Now</button></span>
+        <span title="Create a remote backup schedule using the settings shown in the fields above"
+          class="flash-backuptip"><button type="button" id="schedule-remote-backup"
+            class="button schedule-button">Schedule It</button></span>
+        <span title="Cancel editing of remote schedule" class="flash-backuptip"><button type="button"
+            id="cancelEditBtnremote" style="display:none;">Cancel</button></span>
+        <label class="minimal-backup-label flash-backuptip"
+          title="Enable to have the remote backup only include the config and extra folders, and the syslinux.cfg file">
+          <input type="checkbox" id="minimal_backup_remote" name="MINIMAL_BACKUP_REMOTE" value="yes" <?php echo
+            (($remotesettings['MINIMAL_BACKUP_REMOTE']??'no')==='yes' )?'checked':'';?>>
+          Minimal Backup
+        </label>
+      </div>
+
+      <div id="popupMessageremote"></div>
+    </form>
+  </div>
+
+  <div id="log-section">
+    <form id="log-section-form">
+      <div class="log-header-row">
+        <span title="Clear the flash backup log" class="flash-backuptip"><button type="button"
+            id="clear-last-run-log">Clear Log</button></span>
+        <div id="logtoast">Log copied</div>
+        <span title="Copy flash backup log to clipboard" class="flash-backuptip"><button type="button"
+            id="copy-last-run-log">Copy</button></span>
+      </div>
+      <pre id="last-run-log">Flash backup log not found</pre>
+    </form>
+  </div>
+
+</div>
+
+<div id="schedule-list"></div>
+<div id="schedule-list-remote"></div>
+
+<div id="folderPickerModal" class="vm-modal">
+  <div class="vm-modal-content">
+    <div class="vm-modal-header">
+      <span id="folderPickerTitle">Select Folder</span>
+      <button type="button" id="closeFolderPicker">Close</button>
+    </div>
+    <div id="folderBreadcrumb" class="vm-breadcrumb"></div>
+    <div id="folderList" class="vm-folder-list"></div>
+    <div class="vm-modal-footer"
+      style="display:flex; align-items:center; justify-content:flex-end; gap:12px; position:relative;">
+      <div class="vm-modal-footer" style="position:relative;">
+        <div id="folderToast"
+          style="position:absolute; left:-56%; bottom:50%; transform:translateY(50%); background:#6f8d7b; color:white; padding:6px 12px; border-radius:4px; font-size:13px; box-shadow:0 2px 6px rgba(0,0,0,0.25); display:none;">
+        </div>
+        <button type="button" id="createFolderBtn">Create Folder</button>
+        <span id="newFolderInputWrap" style="display:none;">
+          <input type="text" id="newFolderName" placeholder="Folder name">
+          <button type="button" id="newFolderOk">OK</button>
+          <button type="button" id="newFolderCancel">Cancel</button>
+        </span>
+        <button type="button" id="clearSelectedFolders">Clear Selected</button>
+        <button type="button" id="confirmFolderSelection">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  $(document).on('mouseenter', '.flash-backuptip', function () {
+    const $el = $(this);
+    if (!$el.hasClass('tooltipstered')) {
+      $el.tooltipster({ maxWidth: 300, content: $el.data('tooltip') });
+      $el.removeAttr('title');
+      setTimeout(() => { if ($el.is(':hover')) $el.tooltipster('open'); }, 500);
+    }
+  });
+
+  document.getElementById('copy-last-run-log').addEventListener('click', () => {
+    const toast = document.getElementById('logtoast');
+    toast.style.display = 'block';
+    setTimeout(() => toast.style.display = 'none', 2000);
+  });
+
+  const SERVICE_CONFIG = {
+    Discord: { label: 'Discord Webhook URL', tooltip: 'Enter your Discord webhook URL e.g. https://discord.com/api/webhooks/WEBHOOK or just WEBHOOK', placeholder: 'https://discord.com/api/webhooks/...', prefix: 'https://discord.com/api/webhooks/', needsUserKey: false, needsUrl: true },
+    Gotify: { label: 'Gotify URL', tooltip: 'Enter your Gotify server message URL e.g. https://gotify.example.com/message?token=TOKEN or just TOKEN', placeholder: 'https://gotify.example.com/message?token=...', prefix: 'https://gotify.example.com/message?token=', needsUserKey: false, needsUrl: true },
+    Ntfy: { label: 'Ntfy URL', tooltip: 'Enter your Ntfy topic URL e.g. https://ntfy.sh/yourtopic or just yourtopic', placeholder: 'https://ntfy.sh/yourtopic', prefix: 'https://ntfy.sh/', needsUserKey: false, needsUrl: true },
+    Pushover: { label: 'Pushover App Token URL', tooltip: 'Enter your Pushover app token e.g. https://api.pushover.net/APPTOKEN or just APPTOKEN', placeholder: 'https://api.pushover.net/YOURAPPTOKEN', prefix: 'https://api.pushover.net/', needsUserKey: true, needsUrl: true },
+    Slack: { label: 'Slack Webhook URL', tooltip: 'Enter your Slack webhook URL e.g. https://hooks.slack.com/services/ID or just ID', placeholder: 'https://hooks.slack.com/services/...', prefix: 'https://hooks.slack.com/services/', needsUserKey: false, needsUrl: true },
+    Unraid: { label: null, tooltip: "Uses Unraid's built-in notification system", placeholder: null, prefix: null, needsUserKey: false, needsUrl: false }
+  };
+
+  function normalizeWebhookUrl(val, service) {
+    val = val.trim();
+    if (!val) return val;
+    if (val.startsWith('https://')) return val;
+    const cfg = SERVICE_CONFIG[service];
+    if (cfg && cfg.prefix) return cfg.prefix + val;
+    return val;
+  }
+
+  function validateWebhookUrl(val, service) {
+    if (!val) return true;
+    const cfg = SERVICE_CONFIG[service];
+    if (!cfg || !cfg.prefix) return true;
+    return val.startsWith(cfg.prefix);
+  }
+
+  function getSelectedServices(suffix) {
+    const listId = suffix ? '#notification-service-list-' + suffix : '#notification-service-list';
+    return $(listId).find('input:checked').map(function () { return $(this).val(); }).get();
+  }
+
+  function updateServiceLabel(suffix) {
+    const services = getSelectedServices(suffix);
+    const labelId = suffix ? '#notification-service-label-' + suffix : '#notification-service-label';
+    $(labelId).text(services.length ? services.join(', ') : 'Select service(s)');
+  }
+
+  function rebuildWebhookFields(suffix) {
+    const s = suffix || '';
+    const containerId = s ? '#webhook-fields-container-' + s : '#webhook-fields-container';
+    const services = getSelectedServices(s);
+    const container = $(containerId);
+    container.empty();
+
+    const savedWebhooks = s ? SAVED_WEBHOOKS_REMOTE : SAVED_WEBHOOKS;
+    const savedPushoverKey = s ? SAVED_PUSHOVER_USER_KEY_REMOTE : SAVED_PUSHOVER_USER_KEY;
+
+    services.forEach(function (service) {
+      const cfg = SERVICE_CONFIG[service];
+      if (!cfg) return;
+
+      const s_dash = s ? '-' + s : '';
+      const s_under = s ? '_' + s : '';
+
+      if (cfg.needsUrl) {
+        const urlFieldId = 'webhook_url_' + service.toLowerCase() + s_under;
+        const errorId = 'webhook-error-' + service.toLowerCase() + s_dash;
+        const savedVal = savedWebhooks[service.toUpperCase()] || '';
+
+        const urlRow = $(`
+          <div class="form-pair" id="webhook-row-${service.toLowerCase()}${s_dash}">
+            <label><span class="flash-backuptip" title="${cfg.tooltip}">${cfg.label}:</span></label>
+            <div class="input-wrapper">
+              <span class="flash-backuptip" title="${cfg.tooltip}">
+                <input type="text" id="${urlFieldId}" class="short-input webhook-url-input"
+                  data-service="${service}" data-suffix="${s}"
+                  placeholder="${cfg.placeholder}" value="${savedVal}">
+              </span>
+              <div id="${errorId}" style="color:yellow; font-size:1.00em; display:none;">* Invalid ${service} URL</div>
+            </div>
+          </div>
+        `);
+        container.append(urlRow);
+      }
+
+      if (cfg.needsUserKey) {
+        const pkFieldId = 'pushover_user_key' + s_under;
+        const pkErrorId = 'pushover-user-key-error' + s_dash;
+
+        const pkRow = $(`
+          <div class="form-pair" id="pushover-user-key-row${s_dash}">
+            <label><span class="flash-backuptip" title="Your Pushover user key from pushover.net/dashboard">Pushover User Key:</span></label>
+            <div class="input-wrapper">
+              <span class="flash-backuptip" title="Your Pushover user key from pushover.net/dashboard">
+                <input type="text" id="${pkFieldId}" name="PUSHOVER_USER_KEY${s ? '_REMOTE' : ''}"
+                  class="short-input" placeholder="user key from pushover.net/dashboard" value="${savedPushoverKey}">
+              </span>
+              <div id="${pkErrorId}" style="color:yellow; font-size:1.00em; display:none;">* Pushover user key is required</div>
+            </div>
+          </div>
+        `);
+        container.append(pkRow);
+      }
+    });
+
+    container.find('.webhook-url-input').on('input', function () {
+      const service = $(this).data('service');
+      const val = $(this).val().trim();
+      const errorId = '#webhook-error-' + service.toLowerCase() + (s ? '-' + s : '');
+      const valid = val === '' || validateWebhookUrl(val, service);
+      $(errorId).toggle(!valid);
+    }).on('blur', function () {
+      const service = $(this).data('service');
+      const normalized = normalizeWebhookUrl($(this).val(), service);
+      $(this).val(normalized);
+      $(this).trigger('input');
+    });
+  }
+
+  function toggleNotificationRows(suffix) {
+    const s = suffix || '';
+    const notifSelectId = s ? '#notifications_' + s : '#notifications';
+    const serviceRowId = s ? '#notification-service-row-' + s : '#notification-service-row';
+    const webhookContainer = s ? '#webhook-fields-container-' + s : '#webhook-fields-container';
+
+    if ($(notifSelectId).val() === 'yes') {
+      $(serviceRowId).show();
+      rebuildWebhookFields(s);
+    } else {
+      $(serviceRowId).hide();
+      $(webhookContainer).empty();
+    }
+  }
+
+  // Multiselect open/close — local
+  $('#notification_service').on('click', function (e) {
+    e.stopPropagation();
+    $('#notification-service-list').toggle();
+  });
+
+  // Multiselect open/close — remote
+  $('#notification_service_remote').on('click', function (e) {
+    e.stopPropagation();
+    $('#notification-service-list-remote').toggle();
+  });
+
+  // Prevent clicks inside the lists from closing them
+  $('#notification-service-list').on('click', function (e) {
+    e.stopPropagation();
+  });
+  $('#notification-service-list-remote').on('click', function (e) {
+    e.stopPropagation();
+  });
+
+  // Close dropdowns when clicking outside
+  $(document).on('click', function (e) {
+    if (!$(e.target).closest('#notification_service').length) {
+      $('#notification-service-list').hide();
+    }
+    if (!$(e.target).closest('#notification_service_remote').length) {
+      $('#notification-service-list-remote').hide();
+    }
+  });
+
+  // Checkbox changes
+  $('#notification-service-list').on('change', 'input[type=checkbox]', function () {
+    updateServiceLabel('');
+    rebuildWebhookFields('');
+  });
+  $('#notification-service-list-remote').on('change', 'input[type=checkbox]', function () {
+    updateServiceLabel('remote');
+    rebuildWebhookFields('remote');
+  });
+
+  $('#notifications').on('change', function () { toggleNotificationRows(''); });
+  $('#notifications_remote').on('change', function () { toggleNotificationRows('remote'); });
+
+  // Init on page load
+  toggleNotificationRows('');
+  toggleNotificationRows('remote');
+  updateServiceLabel('');
+  updateServiceLabel('remote');
+
+  var scheduleUILocked = false;
+  var rebuildToken = 0;
+
+  function validateBackupPrereqs() {
+    const dest = $('#backup_destination').val()?.trim();
+    if (!dest) { alert("Please select a backup destination for the schedule"); return false; }
+    if ($('#notifications').val() === 'yes' && getSelectedServices('').includes('Pushover')) {
+      if (!$('#pushover_user_key').val().trim()) { alert('Please enter your Pushover user key'); return false; }
+    }
+    return true;
+  }
+
+  function lockScheduleUI() { scheduleUILocked = true; $(".schedule-action-btn").prop("disabled", true); }
+  function unlockScheduleUI() { scheduleUILocked = false; $(".schedule-action-btn").prop("disabled", false); }
+
+  function showFolderToast(msg) {
+    const t = $('#folderToast');
+    t.stop(true, true).text(msg).fadeIn(150);
+    setTimeout(() => t.fadeOut(400), 2000);
+  }
+
+  const remoteTypes = JSON.parse('<?= addslashes(json_encode($remoteTypes)) ?>');
+
+  var scheduleUILockedremote = false;
+  var rebuildTokenremote = 0;
+
+  function updateB2BucketVisibility() {
+    const selected = $('#rclone_config_remote_hidden').val() || [];
+    const anyB2 = selected.some(r => remoteTypes[r] === 'b2' || remoteTypes[r] === 'crypt-b2');
+    if (anyB2) { $('#b2_bucket_row').show(); }
+    else { $('#b2_bucket_row').hide(); $('#b2_bucket_name').val(''); }
+  }
+
+  function validateBackupPrereqsremote() {
+    const selectedRemotes = $('#rclone_config_remote_hidden').val() || [];
+    if (!selectedRemotes.length) { alert('Please select at least one rclone config'); return false; }
+    const remotePath = $('#remote_path_in_config').val().trim();
+    if (remotePath !== '' && !remotePath.startsWith('/')) { alert('Path In Config must start with a "/" or be left blank to use default /Flash_Backups'); return false; }
+    if (remotePath !== '' && !remotePath.endsWith('/')) { alert('Path In Config must end with a "/" or be left blank to use default /Flash_Backups'); return false; }
+    if (remotePath !== '') {
+      const inner = remotePath.replace(/^\/+|\/+$/g, '');
+      const parts = inner.split('/');
+      const validName = /^[A-Za-z0-9._+\-@ ]+$/;
+      for (const p of parts) { if (!validName.test(p)) { alert('Invalid character detected in folder name: "' + p + '"\n\nAllowed characters:\nletters, numbers, space, _ - . + @'); return false; } }
+    }
+    const anyB2 = selectedRemotes.some(r => remoteTypes[r] === 'b2' || remoteTypes[r] === 'crypt-b2');
+    if (anyB2) {
+      const b2Bucket = $('#b2_bucket_name').val().trim();
+      if (!b2Bucket) { alert('B2 Bucketname is required when a Backblaze B2 config is selected'); return false; }
+      const b2BucketStripped = b2Bucket.replace(/\/+$/, '');
+      if (!/^[A-Za-z0-9._\-]+$/.test(b2BucketStripped)) { alert('Invalid B2 bucket name: "' + b2Bucket + '"\n\nAllowed characters:\nletters, numbers, - . _'); return false; }
+    }
+    if ($('#notifications_remote').val() === 'yes' && getSelectedServices('remote').includes('Pushover')) {
+      if (!$('#pushover_user_key_remote').val().trim()) { alert('Please enter your Pushover user key'); return false; }
+    }
+    return true;
+  }
+
+  function lockScheduleUIremote() { scheduleUILockedremote = true; $(".schedule-action-btn-remote").prop("disabled", true); }
+  function unlockScheduleUIremote() { scheduleUILockedremote = false; $(".schedule-action-btn-remote").prop("disabled", false); }
+
+  function updateBackupStatus() {
+    fetch('/plugins/unraid-backup-tools/flash-backup/helpers/backup_status_check.php')
+      .then(res => res.json()).then(data => { document.getElementById('status-text').textContent = data.status; })
+      .catch(() => { document.getElementById('status-text').textContent = 'Local Backup Not Running'; });
+  }
+  updateBackupStatus();
+  setInterval(updateBackupStatus, 1000);
+
+  function updateRestoreStatus() {
+    fetch('/plugins/unraid-backup-tools/flash-backup/helpers/remote_status_check.php')
+      .then(res => res.json()).then(data => { document.getElementById('status-text-remote').textContent = data.status; })
+      .catch(() => { document.getElementById('status-text-remote').textContent = 'Remote Backup Not Running'; });
+  }
+  updateRestoreStatus();
+  setInterval(updateRestoreStatus, 1000);
+
+  (function waitForSchedulingToggle() {
+    function initSchedulingToggle() {
+      const cronModeSelect = document.getElementById('cron_mode');
+      if (!cronModeSelect) return false;
+      const minutesOptions = document.getElementById('minutes-options');
+      const hourlyOptions = document.getElementById('hourly-options');
+      const dailyOptions = document.getElementById('daily-options');
+      const weeklyOptions = document.getElementById('weekly-options');
+      const monthlyOptions = document.getElementById('monthly-options');
+      const customOptions = document.getElementById('custom-options');
+      const minutesFreq = document.getElementById('minutes_frequency');
+      const hourlyFreq = document.getElementById('hourly_frequency');
+      const dailyTime = document.getElementById('daily_time');
+      const weeklyDay = document.getElementById('weekly_day');
+      const weeklyTime = document.getElementById('weekly_time');
+      const monthlyDay = document.getElementById('monthly_day');
+      const monthlyTime = document.getElementById('monthly_time');
+      const customCron = document.getElementById('custom_cron');
+
+      function toggleCronOptions(value) {
+        minutesOptions.style.display = (value === 'minutes') ? 'block' : 'none';
+        hourlyOptions.style.display = (value === 'hourly') ? 'block' : 'none';
+        dailyOptions.style.display = (value === 'daily') ? 'block' : 'none';
+        weeklyOptions.style.display = (value === 'weekly') ? 'block' : 'none';
+        monthlyOptions.style.display = (value === 'monthly') ? 'block' : 'none';
+        customOptions.style.display = (value === 'custom') ? 'block' : 'none';
+        updateCronExpression();
+      }
+
+      function updateCronExpression() {
+        let cronString = "";
+        if (cronModeSelect.value === "minutes" && minutesFreq) cronString = `*/${parseInt(minutesFreq.value, 10)} * * * *`;
+        else if (cronModeSelect.value === "hourly" && hourlyFreq) cronString = `0 */${parseInt(hourlyFreq.value, 10)} * * *`;
+        else if (cronModeSelect.value === "daily" && dailyTime) cronString = `${parseInt(document.getElementById('daily_minute').value, 10)} ${parseInt(dailyTime.value, 10)} * * *`;
+        else if (cronModeSelect.value === "weekly" && weeklyDay && weeklyTime) {
+          const dayMap = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
+          cronString = `${parseInt(document.getElementById('weekly_minute').value, 10)} ${parseInt(weeklyTime.value, 10)} * * ${dayMap[weeklyDay.value]}`;
+        }
+        else if (cronModeSelect.value === "monthly" && monthlyDay && monthlyTime) cronString = `${parseInt(document.getElementById('monthly_minute').value, 10)} ${parseInt(monthlyTime.value, 10)} ${parseInt(monthlyDay.value, 10)} * *`;
+        else if (cronModeSelect.value === "custom" && customCron) cronString = customCron.value.trim();
+        let hidden = document.getElementById("cron_expression_hidden");
+        if (!hidden) { hidden = document.createElement("input"); hidden.type = "hidden"; hidden.id = "cron_expression_hidden"; hidden.name = "CRON_EXPRESSION"; cronModeSelect.closest(".form-pair").appendChild(hidden); }
+        hidden.value = cronString;
+      }
+
+      toggleCronOptions(cronModeSelect.value);
+      cronModeSelect.addEventListener('change', (e) => toggleCronOptions(e.target.value));
+      minutesFreq?.addEventListener('change', updateCronExpression);
+      hourlyFreq?.addEventListener('change', updateCronExpression);
+      dailyTime?.addEventListener('change', updateCronExpression);
+      document.getElementById('daily_minute')?.addEventListener('change', updateCronExpression);
+      weeklyDay?.addEventListener('change', updateCronExpression);
+      weeklyTime?.addEventListener('change', updateCronExpression);
+      document.getElementById('weekly_minute')?.addEventListener('change', updateCronExpression);
+      monthlyDay?.addEventListener('change', updateCronExpression);
+      monthlyTime?.addEventListener('change', updateCronExpression);
+      document.getElementById('monthly_minute')?.addEventListener('change', updateCronExpression);
+      customCron?.addEventListener('input', updateCronExpression);
+      return true;
+    }
+    if (!initSchedulingToggle()) {
+      const observer = new MutationObserver(() => { if (initSchedulingToggle()) observer.disconnect(); });
+      observer.observe(document.body, { childList: true, subtree: true });
+    }
+  })();
+
+  (function waitForSchedulingToggleRemote() {
+    function initSchedulingToggleRemote() {
+      const cronModeSelect = document.getElementById('cron_mode_remote');
+      if (!cronModeSelect) return false;
+      const minutesOptions = document.getElementById('minutes-options-remote');
+      const hourlyOptions = document.getElementById('hourly-options-remote');
+      const dailyOptions = document.getElementById('daily-options-remote');
+      const weeklyOptions = document.getElementById('weekly-options-remote');
+      const monthlyOptions = document.getElementById('monthly-options-remote');
+      const customOptions = document.getElementById('custom-options-remote');
+      const minutesFreq = document.getElementById('minutes_frequency_remote');
+      const hourlyFreq = document.getElementById('hourly_frequency_remote');
+      const dailyTime = document.getElementById('daily_time_remote');
+      const weeklyDay = document.getElementById('weekly_day_remote');
+      const weeklyTime = document.getElementById('weekly_time_remote');
+      const monthlyDay = document.getElementById('monthly_day_remote');
+      const monthlyTime = document.getElementById('monthly_time_remote');
+      const customCron = document.getElementById('custom_cron_remote');
+
+      function toggleCronOptions(value) {
+        minutesOptions.style.display = (value === 'minutes') ? 'block' : 'none';
+        hourlyOptions.style.display = (value === 'hourly') ? 'block' : 'none';
+        dailyOptions.style.display = (value === 'daily') ? 'block' : 'none';
+        weeklyOptions.style.display = (value === 'weekly') ? 'block' : 'none';
+        monthlyOptions.style.display = (value === 'monthly') ? 'block' : 'none';
+        customOptions.style.display = (value === 'custom') ? 'block' : 'none';
+        updateCronExpressionRemote();
+      }
+
+      function updateCronExpressionRemote() {
+        let cronString = "";
+        if (cronModeSelect.value === "minutes" && minutesFreq) cronString = `*/${parseInt(minutesFreq.value, 10)} * * * *`;
+        else if (cronModeSelect.value === "hourly" && hourlyFreq) cronString = `0 */${parseInt(hourlyFreq.value, 10)} * * *`;
+        else if (cronModeSelect.value === "daily" && dailyTime) cronString = `${parseInt(document.getElementById('daily_minute_remote').value, 10)} ${parseInt(dailyTime.value, 10)} * * *`;
+        else if (cronModeSelect.value === "weekly" && weeklyDay && weeklyTime) {
+          const dayMap = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
+          cronString = `${parseInt(document.getElementById('weekly_minute_remote').value, 10)} ${parseInt(weeklyTime.value, 10)} * * ${dayMap[weeklyDay.value]}`;
+        }
+        else if (cronModeSelect.value === "monthly" && monthlyDay && monthlyTime) cronString = `${parseInt(document.getElementById('monthly_minute_remote').value, 10)} ${parseInt(monthlyTime.value, 10)} ${parseInt(monthlyDay.value, 10)} * *`;
+        else if (cronModeSelect.value === "custom" && customCron) cronString = customCron.value.trim();
+        let hidden = document.getElementById("cron_expression_hidden_remote");
+        if (!hidden) { hidden = document.createElement("input"); hidden.type = "hidden"; hidden.id = "cron_expression_hidden_remote"; hidden.name = "CRON_EXPRESSION_REMOTE"; cronModeSelect.closest(".form-pair").appendChild(hidden); }
+        hidden.value = cronString;
+      }
+
+      toggleCronOptions(cronModeSelect.value);
+      cronModeSelect.addEventListener('change', (e) => toggleCronOptions(e.target.value));
+      minutesFreq?.addEventListener('change', updateCronExpressionRemote);
+      hourlyFreq?.addEventListener('change', updateCronExpressionRemote);
+      dailyTime?.addEventListener('change', updateCronExpressionRemote);
+      document.getElementById('daily_minute_remote')?.addEventListener('change', updateCronExpressionRemote);
+      weeklyDay?.addEventListener('change', updateCronExpressionRemote);
+      weeklyTime?.addEventListener('change', updateCronExpressionRemote);
+      document.getElementById('weekly_minute_remote')?.addEventListener('change', updateCronExpressionRemote);
+      monthlyDay?.addEventListener('change', updateCronExpressionRemote);
+      monthlyTime?.addEventListener('change', updateCronExpressionRemote);
+      document.getElementById('monthly_minute_remote')?.addEventListener('change', updateCronExpressionRemote);
+      customCron?.addEventListener('input', updateCronExpressionRemote);
+      return true;
+    }
+    if (!initSchedulingToggleRemote()) {
+      const observer = new MutationObserver(() => { if (initSchedulingToggleRemote()) observer.disconnect(); });
+      observer.observe(document.body, { childList: true, subtree: true });
+    }
+  })();
+
+  function loadLastRunLog() {
+    fetch('/plugins/unraid-backup-tools/flash-backup/helpers/fetch_last_run_log.php')
+      .then(res => res.text()).then(data => { document.getElementById('last-run-log').textContent = data || 'Flash backup log not found'; })
+      .catch(() => { document.getElementById('last-run-log').textContent = 'Error loading flash backup log'; });
+  }
+  loadLastRunLog();
+  setInterval(loadLastRunLog, 1000);
+
+  const clearLastRunBtn = document.getElementById("clear-last-run-log");
+  if (clearLastRunBtn) {
+    clearLastRunBtn.addEventListener("click", function () {
+      if (confirm("Are you sure you want to clear the flash backup Log?")) {
+        fetch("/plugins/unraid-backup-tools/flash-backup/helpers/clear_log.php", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded", "X-CSRF-TOKEN": csrfToken },
+          body: "log=last&csrf_token=" + encodeURIComponent(csrfToken)
+        })
+          .then(r => r.json())
+          .then(data => { showToast(toastLast, data.message, data.ok ? "ok" : "err"); if (data.ok) document.getElementById("last-run-log").textContent = ""; })
+          .catch(() => showToast(toastLast, "Failed to clear log", "err"));
+      }
+    });
+  }
+
+  $(document).ready(function () {
+    const select = $('#backup_owner');
+    const selected = select.data('selected') || 'nobody';
+    $.getJSON('/plugins/unraid-backup-tools/flash-backup/helpers/list_users_group100.php', function (data) {
+      select.empty();
+      data.users.forEach(user => {
+        const opt = $('<option>', { value: user, text: user });
+        if (user === selected) opt.prop('selected', true);
+        select.append(opt);
+      });
+    });
+  });
+
+  function closeTooltips() { $('.flash-backuptip').trigger('mouseleave'); }
+  $('select').on('click', closeTooltips);
+</script>
+
+<script>
+  let cronValid = false, backupRunning = false;
+  let cronValidRemote = false, backupRunningRemote = false;
+
+  const cronInput = document.getElementById('custom_cron');
+  const cronMode = document.getElementById('cron_mode');
+  const backupbtn = document.getElementById('backupbtn');
+  const warnFields = document.getElementById('cron-warning-fields');
+  const warnSlash = document.getElementById('cron-warning-slash');
+  const cronInputRemote = document.getElementById('custom_cron_remote');
+  const cronModeRemote = document.getElementById('cron_mode_remote');
+  const backupbtnRemote = document.getElementById('backupbtn_remote');
+  const warnFieldsRemote = document.getElementById('cron-warning-fields-remote');
+  const warnSlashRemote = document.getElementById('cron-warning-slash-remote');
+
+  function updateBackupButtonState() { if (backupbtn) backupbtn.disabled = !(cronValid && !backupRunning); }
+  function updateBackupButtonStateRemote() { if (backupbtnRemote) backupbtnRemote.disabled = !(cronValidRemote && !backupRunningRemote); }
+
+  function validateCronLive() {
+    if (!cronMode || !cronInput) return;
+    if (cronMode.value !== "custom") { cronValid = true;[warnFields, warnSlash].forEach(w => { if (w) w.style.display = 'none'; }); updateBackupButtonState(); return; }
+    const expr = cronInput.value.trim(); const parts = expr.split(/\s+/);
+    [warnFields, warnSlash].forEach(w => { if (w) w.style.display = 'none'; }); cronValid = true;
+    if (!expr) { cronValid = false; updateBackupButtonState(); return; }
+    if (parts.length !== 5) { cronValid = false; if (warnFields) warnFields.style.display = 'block'; }
+    if (parts.length === 5) { for (const field of parts) { if (!/^[\d*\/]+$/.test(field)) { cronValid = false; if (warnFields) warnFields.style.display = 'block'; } if (field.includes('/') && !field.match(/^\*\/\d+$/)) { cronValid = false; if (warnSlash) warnSlash.style.display = 'block'; } } }
+    updateBackupButtonState();
+  }
+
+  function validateCronLiveRemote() {
+    if (!cronModeRemote || !cronInputRemote) return;
+    if (cronModeRemote.value !== "custom") { cronValidRemote = true;[warnFieldsRemote, warnSlashRemote].forEach(w => { if (w) w.style.display = 'none'; }); updateBackupButtonStateRemote(); return; }
+    const expr = cronInputRemote.value.trim(); const parts = expr.split(/\s+/);
+    [warnFieldsRemote, warnSlashRemote].forEach(w => { if (w) w.style.display = 'none'; }); cronValidRemote = true;
+    if (!expr) { cronValidRemote = false; updateBackupButtonStateRemote(); return; }
+    if (parts.length !== 5) { cronValidRemote = false; if (warnFieldsRemote) warnFieldsRemote.style.display = 'block'; }
+    if (parts.length === 5) { for (const field of parts) { if (!/^[\d*\/]+$/.test(field)) { cronValidRemote = false; if (warnFieldsRemote) warnFieldsRemote.style.display = 'block'; } if (field.includes('/') && !field.match(/^\*\/\d+$/)) { cronValidRemote = false; if (warnSlashRemote) warnSlashRemote.style.display = 'block'; } } }
+    updateBackupButtonStateRemote();
+  }
+
+  if (cronInput) cronInput.addEventListener('input', validateCronLive);
+  if (cronMode) cronMode.addEventListener('change', validateCronLive);
+  if (cronInputRemote) cronInputRemote.addEventListener('input', validateCronLiveRemote);
+  if (cronModeRemote) cronModeRemote.addEventListener('change', validateCronLiveRemote);
+  validateCronLive(); validateCronLiveRemote();
+
+  let backupStartTime = 0, backupStartTimeRemote = 0;
+  const MIN_DURATION = 5000, MIN_DURATION_REMOTE = 5000;
+
+  function updateBackupUI(running) {
+    const status = $('#backup-status'); const btn = $('#backupbtn');
+    if (running) { if (!backupStartTime) backupStartTime = Date.now(); btn.text('Backup running...'); status.show(); return; }
+    if (!backupStartTime) { btn.text('Backup Now'); status.hide(); return; }
+    const elapsed = Date.now() - backupStartTime;
+    if (elapsed < MIN_DURATION) { setTimeout(() => updateBackupUI(false), MIN_DURATION - elapsed); return; }
+    backupStartTime = 0; btn.text('Backup Now'); status.hide();
+  }
+
+  function updateBackupUIRemote(running) {
+    const status = $('#backup-status-remote'); const btn = $('#backupbtn_remote');
+    if (running) { if (!backupStartTimeRemote) backupStartTimeRemote = Date.now(); btn.text('Backup running...'); status.show(); return; }
+    if (!backupStartTimeRemote) { btn.text('Backup Now'); status.hide(); return; }
+    const elapsed = Date.now() - backupStartTimeRemote;
+    if (elapsed < MIN_DURATION_REMOTE) { setTimeout(() => updateBackupUIRemote(false), MIN_DURATION_REMOTE - elapsed); return; }
+    backupStartTimeRemote = 0; btn.text('Backup Now'); status.hide();
+  }
+
+  function pollBackupStatus() { $.getJSON('/plugins/unraid-backup-tools/flash-backup/helpers/backup_status.php', function (res) { backupRunning = res.running === true; updateBackupButtonState(); updateBackupUI(res.running); }); }
+  function pollBackupStatusRemote() { $.getJSON('/plugins/unraid-backup-tools/flash-backup/helpers/remote_status.php', function (res) { backupRunningRemote = res.running === true; updateBackupButtonStateRemote(); updateBackupUIRemote(res.running); }); }
+  setInterval(pollBackupStatus, 1000); setInterval(pollBackupStatusRemote, 1000);
+  $(document).ready(function () { pollBackupStatus(); pollBackupStatusRemote(); });
+
+  let backupRequestInProgress = false, backupRequestInProgressRemote = false;
+
+  function backupclassifyPath(p) {
+    if (p.startsWith('/mnt/user/') || p === '/mnt/user') return 'USER';
+    if (p.startsWith('/mnt/user0/') || p === '/mnt/user0') return 'USER0';
+    return 'OTHER';
+  }
+
+  $('#backupbtn').on('click', async function () {
+    if (backupRequestInProgress) { console.warn('Backup already being triggered'); return; }
+    const dest = $('#backup_destination').val().trim();
+    if (!dest) { alert('Please select a backup destination'); return; }
+    if ($('#notifications').val() === 'yes' && getSelectedServices('').includes('Pushover')) {
+      if (!$('#pushover_user_key').val().trim()) { alert('Please enter your Pushover user key'); return; }
+    }
+    backupRequestInProgress = true;
+
+    const webhookParams = {};
+    $('#webhook-fields-container .webhook-url-input').each(function () {
+      webhookParams['WEBHOOK_' + $(this).data('service').toUpperCase()] = $(this).val().trim();
+    });
+
+    const params = $.param({
+      BACKUP_DESTINATION: dest,
+      BACKUP_OWNER: $('#backup_owner').val(),
+      BACKUPS_TO_KEEP: $('#backups_to_keep').val(),
+      DRY_RUN: $('#dry_run').val(),
+      MINIMAL_BACKUP: $('#minimal_backup').is(':checked') ? 'yes' : 'no',
+      NOTIFICATION_SERVICE: getSelectedServices('').join(','),
+      NOTIFICATIONS: $('#notifications').val(),
+      PUSHOVER_USER_KEY: $('#pushover_user_key').val() || '',
+      WEBHOOK_DISCORD: webhookParams['WEBHOOK_DISCORD'] || '',
+      WEBHOOK_GOTIFY: webhookParams['WEBHOOK_GOTIFY'] || '',
+      WEBHOOK_NTFY: webhookParams['WEBHOOK_NTFY'] || '',
+      WEBHOOK_PUSHOVER: webhookParams['WEBHOOK_PUSHOVER'] || '',
+      WEBHOOK_SLACK: webhookParams['WEBHOOK_SLACK'] || '',
+      csrf_token: csrfToken
+    });
+
+    $.get('/plugins/unraid-backup-tools/flash-backup/helpers/save_settings.php?' + params)
+      .done(function (res) { if (res && res.status === 'ok') startBackup(); else alert('Failed to save settings'); })
+      .fail(function () { alert('Error saving settings'); })
+      .always(function () { backupRequestInProgress = false; });
+  });
+
+  let b2BucketNameTimer;
+  $('#b2_bucket_name').on('input', function () {
+    let val = $(this).val().replace(/\/+/g, '/'); $(this).val(val);
+    clearTimeout(b2BucketNameTimer);
+    b2BucketNameTimer = setTimeout(() => { let v = $('#b2_bucket_name').val().trim(); if (v && !v.endsWith('/')) $('#b2_bucket_name').val(v + '/'); }, 2000);
+  });
+  $('#b2_bucket_name').on('blur', function () {
+    let val = $(this).val().trim().toLowerCase(); if (!val) return;
+    val = val.replace(/\/+/g, '/'); if (!val.endsWith('/')) val += '/'; $(this).val(val);
+  });
+  $(function () { let val = $('#b2_bucket_name').val().trim(); if (!val) return; val = val.replace(/\/+/g, '/'); if (!val.endsWith('/')) val += '/'; $('#b2_bucket_name').val(val); });
+
+  $('#backupbtn_remote').on('click', async function () {
+    if (backupRequestInProgressRemote) { console.warn('Remote backup already being triggered'); return; }
+    const selectedRemotes = $('#rclone_config_remote_hidden').val() || [];
+    if (!selectedRemotes.length) { alert('Please select at least one rclone config'); return; }
+    const remotePath = $('#remote_path_in_config').val().trim();
+    if (remotePath !== '' && !remotePath.startsWith('/')) { alert('Path In Config must start with a "/"'); return; }
+    if (remotePath !== '' && !remotePath.endsWith('/')) { alert('Path In Config must end with a "/"'); return; }
+    if (remotePath !== '') {
+      const inner = remotePath.replace(/^\/+|\/+$/g, ''); const parts = inner.split('/');
+      const validName = /^[A-Za-z0-9._+\-@ ]+$/;
+      for (const p of parts) { if (!validName.test(p)) { alert('Invalid character in folder name: "' + p + '"'); return; } }
+    }
+    const anyB2 = selectedRemotes.some(r => remoteTypes[r] === 'b2' || remoteTypes[r] === 'crypt-b2');
+    if (anyB2) {
+      const b2Bucket = $('#b2_bucket_name').val().trim();
+      if (!b2Bucket) { alert('B2 Bucketname is required when a Backblaze B2 config is selected'); return; }
+      if (!/^[A-Za-z0-9._\-]+$/.test(b2Bucket.replace(/\/+$/, ''))) { alert('Invalid B2 bucket name'); return; }
+    }
+    if ($('#notifications_remote').val() === 'yes' && getSelectedServices('remote').includes('Pushover')) {
+      if (!$('#pushover_user_key_remote').val().trim()) { alert('Please enter your Pushover user key'); return; }
+    }
+    backupRequestInProgressRemote = true;
+    let finalPath = remotePath === '' ? '/Flash_Backups/' : remotePath;
+    const b2Bucket = $('#b2_bucket_name').val().trim();
+
+    const webhookParamsRemote = {};
+    $('#webhook-fields-container-remote .webhook-url-input').each(function () {
+      webhookParamsRemote['WEBHOOK_' + $(this).data('service').toUpperCase() + '_REMOTE'] = $(this).val().trim();
+    });
+
+    const params = $.param({
+      B2_BUCKET_NAME: b2Bucket,
+      BACKUPS_TO_KEEP_REMOTE: $('#backups_to_keep_remote').val(),
+      DRY_RUN_REMOTE: $('#dry_run_remote').val(),
+      MINIMAL_BACKUP_REMOTE: $('#minimal_backup_remote').is(':checked') ? 'yes' : 'no',
+      NOTIFICATION_SERVICE_REMOTE: getSelectedServices('remote').join(','),
+      NOTIFICATIONS_REMOTE: $('#notifications_remote').val(),
+      PUSHOVER_USER_KEY_REMOTE: $('#pushover_user_key_remote').val() || '',
+      RCLONE_CONFIG_REMOTE: selectedRemotes,
+      REMOTE_PATH_IN_CONFIG: finalPath,
+      WEBHOOK_DISCORD_REMOTE: webhookParamsRemote['WEBHOOK_DISCORD_REMOTE'] || '',
+      WEBHOOK_GOTIFY_REMOTE: webhookParamsRemote['WEBHOOK_GOTIFY_REMOTE'] || '',
+      WEBHOOK_NTFY_REMOTE: webhookParamsRemote['WEBHOOK_NTFY_REMOTE'] || '',
+      WEBHOOK_PUSHOVER_REMOTE: webhookParamsRemote['WEBHOOK_PUSHOVER_REMOTE'] || '',
+      WEBHOOK_SLACK_REMOTE: webhookParamsRemote['WEBHOOK_SLACK_REMOTE'] || '',
+      csrf_token: csrfToken
+    });
+
+    $.get('/plugins/unraid-backup-tools/flash-backup/helpers/save_settings_remote.php?' + params)
+      .done(function (res) { if (res && res.status === 'ok') startBackupRemote(); else alert('Failed to save remote settings'); })
+      .fail(function () { alert('Error saving remote settings'); })
+      .always(function () { backupRequestInProgressRemote = false; });
+  });
+
+  function startBackup() {
+    $.get('/plugins/unraid-backup-tools/flash-backup/helpers/backup.php', { csrf_token: csrfToken })
+      .done(function (res) { if (res && res.status === 'ok') console.log('Backup started, PID:', res.pid); else alert(res.message || 'Failed to start backup'); })
+      .fail(function () { alert('Error starting backup'); });
+  }
+
+  function startBackupRemote() {
+    $.get('/plugins/unraid-backup-tools/flash-backup/helpers/remote_backup.php', { csrf_token: csrfToken })
+      .done(function (res) { if (res && res.status === 'ok') console.log('Remote backup started, PID:', res.pid); else alert(res.message || 'Failed to start remote backup'); })
+      .fail(function () { alert('Error starting remote backup'); });
+  }
+
+  function cronToMinutesOfWeek(expr) {
+    const parts = expr.trim().split(/\s+/); if (parts.length !== 5) return [];
+    const [min, hour, dom, month, dow] = parts; const minutes = []; const MINS_IN_WEEK = 7 * 24 * 60;
+    const mInterval = min.match(/^\*\/(\d+)$/);
+    if (mInterval && hour === '*' && dom === '*' && month === '*' && dow === '*') { const n = parseInt(mInterval[1], 10); for (let i = 0; i < MINS_IN_WEEK; i += n) minutes.push(i); return minutes; }
+    const hInterval = hour.match(/^\*\/(\d+)$/);
+    if (min === '0' && hInterval && dom === '*' && month === '*' && dow === '*') { const n = parseInt(hInterval[1], 10); for (let h = 0; h < 7 * 24; h += n) minutes.push(h * 60); return minutes; }
+    if (min === '0' && /^\d+$/.test(hour) && dom === '*' && month === '*' && dow === '*') { const h = parseInt(hour, 10); for (let d = 0; d < 7; d++) minutes.push(d * 24 * 60 + h * 60); return minutes; }
+    if (min === '0' && /^\d+$/.test(hour) && dom === '*' && month === '*' && /^\d+$/.test(dow)) { minutes.push(parseInt(dow, 10) * 24 * 60 + parseInt(hour, 10) * 60); return minutes; }
+    if (min === '0' && /^\d+$/.test(hour) && /^\d+$/.test(dom) && month === '*' && dow === '*') { minutes.push(((parseInt(dom, 10) - 1) % 7) * 24 * 60 + parseInt(hour, 10) * 60); return minutes; }
+    return [];
+  }
+
+  function checkCronConflicts(newCron, existingCrons, excludeId, thresholdMinutes) {
+    const newTimes = cronToMinutesOfWeek(newCron); if (!newTimes.length) return null;
+    const MINS_IN_WEEK = 7 * 24 * 60;
+    for (const entry of existingCrons) {
+      if (entry.id === excludeId) continue;
+      const existingTimes = cronToMinutesOfWeek(entry.cron);
+      for (const nt of newTimes) { for (const et of existingTimes) { if (Math.min(Math.abs(nt - et), MINS_IN_WEEK - Math.abs(nt - et)) < thresholdMinutes) return entry.cron; } }
+    }
+    return null;
+  }
+
+  async function fetchExistingCrons() { return $.getJSON('/plugins/unraid-backup-tools/flash-backup/helpers/schedule_cron_check.php'); }
+
+  window.editingScheduleId = null;
+  function loadSchedules() { return $.get('/plugins/unraid-backup-tools/flash-backup/helpers/schedule_list.php', function (html) { $('#schedule-list').html(html); }).always(() => unlockScheduleUI()); }
+
+  function validateCustomCron(expr) {
+    expr = expr.trim(); const parts = expr.split(/\s+/);
+    if (parts.length !== 5 || parts[0] === '*') return { valid: false };
+    const m = parts[0].match(/^\*\/(\d+)$/); if (m && parseInt(m[1], 10) < 2) return { valid: false };
+    return { valid: true, expression: expr };
+  }
+
+  function buildCronFromUI() {
+    const mode = $('#cron_mode').val();
+    switch (mode) {
+      case 'minutes': return { valid: true, expression: `*/${parseInt($('#minutes_frequency').val(), 10)} * * * *` };
+      case 'hourly': return { valid: true, expression: `0 */${parseInt($('#hourly_frequency').val(), 10)} * * *` };
+      case 'daily': return { valid: true, expression: `${parseInt($('#daily_minute').val(), 10)} ${parseInt($('#daily_time').val(), 10)} * * *` };
+      case 'weekly': { const dm = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 }; return { valid: true, expression: `${parseInt($('#weekly_minute').val(), 10)} ${parseInt($('#weekly_time').val(), 10)} * * ${dm[$('#weekly_day').val()]}` }; }
+      case 'monthly': return { valid: true, expression: `${parseInt($('#monthly_minute').val(), 10)} ${parseInt($('#monthly_time').val(), 10)} ${parseInt($('#monthly_day').val(), 10)} * *` };
+      case 'custom': return validateCustomCron($('#custom_cron').val());
+      default: return { valid: false };
+    }
+  }
+
+  async function scheduleJob(type) {
+    if (!validateBackupPrereqs()) return;
+    if (scheduleUILocked) return; lockScheduleUI();
+    const cron = buildCronFromUI(); if (!cron.valid) { unlockScheduleUI(); alert("Invalid cron expression"); return; }
+    const existingCrons = await fetchExistingCrons();
+    const conflict = checkCronConflicts(cron.expression, existingCrons, window.editingScheduleId, 15);
+    if (conflict) { unlockScheduleUI(); alert('This schedule is within 15 minutes of an existing schedule (' + conflict + '). Please choose a different time.'); return; }
+    const settings = {};
+    $('input[name], select[name]').each(function () { if ($(this).is(':checkbox')) settings[this.name] = $(this).is(':checked') ? 'yes' : 'no'; else settings[this.name] = $(this).val(); });
+    const url = window.editingScheduleId ? 'schedule_update.php' : 'schedule_create.php';
+    $.ajax({
+      type: 'POST', url: `/plugins/unraid-backup-tools/flash-backup/helpers/${url}`, data: { id: window.editingScheduleId, type, cron: cron.expression, settings },
+      success: function () { resetScheduleUI(); window.editingScheduleId = null; loadSchedules(); showPopup("Schedule saved!"); },
+      error: function (xhr) { unlockScheduleUI(); if (xhr.status === 409) alert('Duplicate schedule detected!'); else alert('Error creating/updating schedule: ' + xhr.responseText); }
+    });
+  }
+
+  function editSchedule(id) {
+    if (scheduleUILocked) return; lockScheduleUI();
+    $.getJSON('/plugins/unraid-backup-tools/flash-backup/helpers/schedule_load.php', { id }, function (s) {
+      const settings = s.SETTINGS || {};
+      if (s.TYPE) $('[name="type"]').val(s.TYPE).trigger('change');
+      for (const k in settings) { const el = $('[name="' + k + '"]'); if (!el.length) continue; if (el.is(':checkbox')) { const v = String(settings[k]).toLowerCase(); el.prop('checked', v === 'yes' || v === '1' || v === 'true'); } else if (el.is(':radio')) $('[name="' + k + '"][value="' + settings[k] + '"]').prop('checked', true); else el.val(settings[k]).trigger('change'); }
+      $('#cron_mode').val(detectCronMode(s.CRON)).trigger('change');
+      window.editingScheduleId = id;
+      $('#schedule-local-backup').text('Update');
+      const $tip = $('#schedule-local-backup').closest('span');
+      $tip.data('tooltip', 'Update the local backup schedule using the settings shown in the fields above');
+      if ($tip.hasClass('tooltipstered')) $tip.tooltipster('content', 'Update the local backup schedule using the settings shown in the fields above');
+      $('#cancelEditBtn').show(); unlockScheduleUI();
+    });
+  }
+
+  $('#cancelEditBtn').on('click', function () { location.reload(); });
+
+  function showPopup(message) { const popup = $('#popupMessage'); popup.text(message).fadeIn(150); setTimeout(() => { popup.fadeOut(200, () => { popup.text(''); popup.hide(); }); }, 3000); }
+
+  function resetScheduleUI() {
+    $('#schedule-local-backup').text('Schedule It');
+    const $tip = $('#schedule-local-backup').closest('span');
+    $tip.data('tooltip', 'Create a backup schedule using the settings shown in the fields above');
+    if ($tip.hasClass('tooltipstered')) $tip.tooltipster('content', 'Create a backup schedule using the settings shown in the fields above');
+    $('#cancelEditBtn').hide(); $('#popupMessage').stop(true, true).hide().text('');
+  }
+
+  function deleteSchedule(id) { if (scheduleUILocked) return; if (!confirm("Delete this schedule?")) return; lockScheduleUI(); $.post('/plugins/unraid-backup-tools/flash-backup/helpers/schedule_delete.php', { id }).always(() => loadSchedules()); }
+
+  function runScheduleBackup(id, btn) {
+    if (scheduleUILocked) return;
+    if (!confirm("Are you sure you want to run this backup now?")) return;
+    lockScheduleUI(); btn.disabled = true;
+    const originalText = btn.textContent, originalTitle = btn.getAttribute('title');
+    btn.textContent = "Running";
+    $.post('/plugins/unraid-backup-tools/flash-backup/helpers/run_schedule.php', { id })
+      .done(function (res) {
+        if (!res.started) { alert("Failed to start backup"); btn.disabled = false; btn.textContent = originalText; btn.setAttribute('title', originalTitle); unlockScheduleUI(); return; }
+        const poll = setInterval(function () { $.getJSON('/plugins/unraid-backup-tools/flash-backup/helpers/check_lock.php', function (res) { if (!res.locked) { clearInterval(poll); btn.disabled = false; btn.textContent = originalText; unlockScheduleUI(); } }); }, 1000);
+      })
+      .fail(function (xhr, status, err) { alert("Failed to start backup: " + (xhr.responseJSON?.error || err)); btn.disabled = false; btn.textContent = originalText; btn.setAttribute('title', originalTitle); unlockScheduleUI(); });
+  }
+
+  function toggleSchedule(id, isEnabled) { if (scheduleUILocked) return; if (!confirm(isEnabled ? "Disable this schedule?" : "Enable this schedule?")) return; lockScheduleUI(); $.post('/plugins/unraid-backup-tools/flash-backup/helpers/schedule_toggle.php', { id }).always(() => loadSchedules()); }
+
+  $(document).ready(function () {
+    loadSchedules();
+    $(document).on('click', '#schedule-local-backup', function () { scheduleJob('local-backup'); });
+  });
+
+  window.editingScheduleIdremote = null;
+  function loadSchedulesremote() { return $.get('/plugins/unraid-backup-tools/flash-backup/helpers/schedule_list_remote.php', function (html) { $('#schedule-list-remote').html(html); }).always(() => unlockScheduleUIremote()); }
+
+  function validateCustomCronremote(expr) {
+    expr = expr.trim(); const parts = expr.split(/\s+/);
+    if (parts.length !== 5 || parts[0] === '*') return { valid: false };
+    const m = parts[0].match(/^\*\/(\d+)$/); if (m && parseInt(m[1], 10) < 2) return { valid: false };
+    return { valid: true, expression: expr };
+  }
+
+  function buildCronFromUIremote() {
+    const mode = $('#cron_mode_remote').val();
+    switch (mode) {
+      case 'minutes': return { valid: true, expression: `*/${parseInt($('#minutes_frequency_remote').val(), 10)} * * * *` };
+      case 'hourly': return { valid: true, expression: `0 */${parseInt($('#hourly_frequency_remote').val(), 10)} * * *` };
+      case 'daily': return { valid: true, expression: `${parseInt($('#daily_minute_remote').val(), 10)} ${parseInt($('#daily_time_remote').val(), 10)} * * *` };
+      case 'weekly': { const dm = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 }; return { valid: true, expression: `${parseInt($('#weekly_minute_remote').val(), 10)} ${parseInt($('#weekly_time_remote').val(), 10)} * * ${dm[$('#weekly_day_remote').val()]}` }; }
+      case 'monthly': return { valid: true, expression: `${parseInt($('#monthly_minute_remote').val(), 10)} ${parseInt($('#monthly_time_remote').val(), 10)} ${parseInt($('#monthly_day_remote').val(), 10)} * *` };
+      case 'custom': return validateCustomCronremote($('#custom_cron_remote').val());
+      default: return { valid: false };
+    }
+  }
+
+  async function scheduleJobremote(type) {
+    if (!validateBackupPrereqsremote()) return;
+    if (scheduleUILockedremote) return; lockScheduleUIremote();
+    const cron = buildCronFromUIremote(); if (!cron.valid) { unlockScheduleUIremote(); alert("Invalid cron expression"); return; }
+    const existingCrons = await fetchExistingCrons();
+    const conflict = checkCronConflicts(cron.expression, existingCrons, window.editingScheduleIdremote, 15);
+    if (conflict) { unlockScheduleUIremote(); alert('This remote schedule is within 15 minutes of an existing schedule (' + conflict + '). Please choose a different time.'); return; }
+    const settings = {};
+    $('input[name], select[name]').each(function () { const key = this.name.replace(/\[\]$/, ''); if ($(this).is(':checkbox')) settings[key] = $(this).is(':checked') ? 'yes' : 'no'; else { const val = $(this).val(); settings[key] = Array.isArray(val) ? val.join(',') : val; } });
+    const url = window.editingScheduleIdremote ? 'schedule_update_remote.php' : 'schedule_create_remote.php';
+    $.ajax({
+      type: 'POST', url: `/plugins/unraid-backup-tools/flash-backup/helpers/${url}`, data: { id: window.editingScheduleIdremote, type, cron: cron.expression, settings },
+      success: function () { resetScheduleUIremote(); window.editingScheduleIdremote = null; loadSchedulesremote(); showPopupremote("Schedule saved!"); },
+      error: function (xhr) { unlockScheduleUIremote(); if (xhr.status === 409) alert('Duplicate remote schedule!'); else alert('Error creating/updating remote schedule: ' + xhr.responseText); }
+    });
+  }
+
+  function editScheduleremote(id) {
+    if (scheduleUILockedremote) return; lockScheduleUIremote();
+    $.getJSON('/plugins/unraid-backup-tools/flash-backup/helpers/schedule_load_remote.php', { id }, function (s) {
+      const settings = s.SETTINGS || {};
+      if (s.TYPE) $('[name="type_remote"]').val(s.TYPE).trigger('change');
+      for (const k in settings) { const el = $('[name="' + k + '"]'); if (!el.length) continue; if (el.is(':checkbox')) { const v = String(settings[k]).toLowerCase(); el.prop('checked', v === 'yes' || v === '1' || v === 'true'); } else if (el.is(':radio')) $('[name="' + k + '"][value="' + settings[k] + '"]').prop('checked', true); else el.val(settings[k]).trigger('change'); }
+      $('#cron_mode_remote').val(detectCronMode(s.CRON)).trigger('change');
+      window.editingScheduleIdremote = id;
+      $('#schedule-remote-backup').text('Update');
+      const $tip = $('#schedule-remote-backup').closest('span');
+      $tip.data('tooltip', 'Update the remote backup schedule using the settings shown in the fields above');
+      if ($tip.hasClass('tooltipstered')) $tip.tooltipster('content', 'Update the remote backup schedule using the settings shown in the fields above');
+      $('#cancelEditBtnremote').show(); unlockScheduleUIremote();
+    });
+  }
+
+  $('#cancelEditBtnremote').on('click', function () { location.reload(); });
+
+  function showPopupremote(message) { const popup = $('#popupMessageremote'); popup.text(message).fadeIn(150); setTimeout(() => { popup.fadeOut(200, () => { popup.text(''); popup.hide(); }); }, 3000); }
+
+  function resetScheduleUIremote() {
+    $('#schedule-remote-backup').text('Schedule It');
+    const $tip = $('#schedule-remote-backup').closest('span');
+    $tip.data('tooltip', 'Create a remote backup schedule using the settings shown in the fields above');
+    if ($tip.hasClass('tooltipstered')) $tip.tooltipster('content', 'Create a remote backup schedule using the settings shown in the fields above');
+    $('#cancelEditBtnremote').hide(); $('#popupMessageremote').stop(true, true).hide().text('');
+  }
+
+  function deleteScheduleremote(id) { if (scheduleUILockedremote) return; if (!confirm("Delete this remote schedule?")) return; lockScheduleUIremote(); $.post('/plugins/unraid-backup-tools/flash-backup/helpers/schedule_delete_remote.php', { id }).always(() => loadSchedulesremote()); }
+
+  function runScheduleBackupremote(id, btn) {
+    if (scheduleUILockedremote) return;
+    if (!confirm("Are you sure you want to run this remote backup now?")) return;
+    lockScheduleUIremote(); btn.disabled = true;
+    const originalText = btn.textContent, originalTitle = btn.getAttribute('title');
+    btn.textContent = "Running";
+    $.post('/plugins/unraid-backup-tools/flash-backup/helpers/run_schedule_remote.php', { id })
+      .done(function (res) {
+        if (!res.started) { alert("Failed to start remote backup"); btn.disabled = false; btn.textContent = originalText; btn.setAttribute('title', originalTitle); unlockScheduleUIremote(); return; }
+        const poll = setInterval(function () { $.getJSON('/plugins/unraid-backup-tools/flash-backup/helpers/check_lock.php', function (res) { if (!res.locked) { clearInterval(poll); btn.disabled = false; btn.textContent = originalText; unlockScheduleUIremote(); } }); }, 1000);
+      })
+      .fail(function (xhr, status, err) { alert("Failed to start remote backup: " + (xhr.responseJSON?.error || err)); btn.disabled = false; btn.textContent = originalText; btn.setAttribute('title', originalTitle); unlockScheduleUIremote(); });
+  }
+
+  function toggleScheduleremote(id, isEnabled) { if (scheduleUILockedremote) return; if (!confirm(isEnabled ? "Disable this remote schedule?" : "Enable this remote schedule?")) return; lockScheduleUIremote(); $.post('/plugins/unraid-backup-tools/flash-backup/helpers/schedule_toggle_remote.php', { id }).always(() => loadSchedulesremote()); }
+
+  $(document).ready(function () {
+    loadSchedulesremote();
+    $(document).on('click', '#schedule-remote-backup', function () { scheduleJobremote('remote-backup'); });
+  });
+</script>
+
+<script>
+  function showPopup(message) { const popup = $('#popupMessage'); popup.text(message).fadeIn(150); setTimeout(() => { popup.fadeOut(200, () => { popup.text(''); popup.hide(); }); }, 3000); }
+
+  function detectCronMode(cron) {
+    if (!cron) return 'minutes';
+    if (/^\*\/\d+ \* \* \* \*$/.test(cron)) return 'minutes';
+    if (/^0 \*\/\d+ \* \* \*$/.test(cron)) return 'hourly';
+    if (/^\d+ \d+ \* \* \*$/.test(cron)) return 'daily';
+    if (/^\d+ \d+ \* \* [0-6]$/.test(cron)) return 'weekly';
+    if (/^\d+ \d+ \d+ \* \*$/.test(cron)) return 'monthly';
+    return 'custom';
+  }
+</script>
+
+<script>
+  if (typeof caPluginUpdateCheck === "function") {
+    caPluginUpdateCheck("flash-backup.plg", { name: "flash-backup" });
+  }
+</script>
+
+<script>
+  let currentPath = "/mnt";
+  let selectedFolders = [], accumulatedFolders = [], persistentFolders = [];
+
+  function resolveAndApplyPath(selectedPath, targetInputId) {
+    const params = new URLSearchParams({ path: selectedPath, csrf_token: csrf_token });
+    fetch('/plugins/unraid-backup-tools/flash-backup/helpers/resolve_path.php', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString() })
+      .then(r => r.text()).then(resolvedPath => { const $field = $('#' + targetInputId); $field.val(resolvedPath || selectedPath).trigger('input').trigger('change'); $('#folderPickerModal').hide(); })
+      .catch(() => { const $field = $('#' + targetInputId); $field.val(selectedPath).trigger('change'); $('#folderPickerModal').hide(); });
+  }
+
+  function loadFolders(path) {
+    $.getJSON('/plugins/unraid-backup-tools/flash-backup/helpers/list_folders.php', { path, field: activeInputFieldId }, function (data) {
+      currentPath = data.current; selectedFolder = null;
+      const parts = currentPath.split('/').filter(p => p !== ''); let breadcrumbHTML = '', buildPath = '';
+      parts.forEach((part, index) => { buildPath += '/' + part; breadcrumbHTML += `<span class="breadcrumb-part" data-path="${buildPath}" style="cursor:pointer;">${part}</span>`; if (index < parts.length - 1) breadcrumbHTML += ' / '; });
+      $('#folderBreadcrumb').html(breadcrumbHTML);
+
+      let html = '';
+      if (data.parent) html += `<div class="vm-folder-item browse-row" data-path="${data.parent}" style="cursor:pointer; display:flex; align-items:center;">.. Up Directory</div>`;
+      data.folders.forEach(folder => {
+        const isChecked = persistentFolders.includes(folder.path) ? 'checked' : '';
+        const disabledAttr = folder.selectable ? '' : 'disabled';
+        html += `<div class="vm-folder-item browse-row" data-path="${folder.path}" style="display:flex; align-items:center; gap:0px;">
+          <label class="folder-check-label" style="display:flex; align-items:center; cursor:pointer; padding:9px 2px 4px 4px;"><input type="checkbox" class="folder-checkbox" value="${folder.path}" ${isChecked} ${disabledAttr}></label>
+          <span class="folder-name-label" style="flex:1; cursor:pointer;">${folder.name}</span>
+        </div>`;
+      });
+      $('#folderList').html(html);
+
+      $('.breadcrumb-part').off('click').on('click', function () { loadFolders($(this).data('path')); });
+      $('.browse-row').off('click').on('click', function (e) {
+        if ($(e.target).closest('.folder-check-label').length || $(e.target).closest('.folder-name-label').length) return;
+        loadFolders($(this).data('path'));
+      });
+      $('.folder-name-label').off('click').on('click', function () { loadFolders($(this).closest('.browse-row').data('path')); });
+      $('.folder-check-label').off('click').on('click', function (e) { e.stopPropagation(); });
+      $('.folder-checkbox').off('change').on('change', function (e) {
+        if (this.disabled) return;
+        const path = $(this).val();
+        if (this.checked) { if (!persistentFolders.includes(path)) { persistentFolders.push(path); showFolderToast("Folder selected"); } }
+        else { persistentFolders = persistentFolders.filter(p => p !== path); showFolderToast("Removed"); }
+        e.stopPropagation();
+      });
+      $('#clearSelectedFolders').off('click').on('click', function () { persistentFolders = []; selectedFolders = []; accumulatedFolders = []; $('.folder-checkbox').prop('checked', false); showFolderToast("Selections cleared"); });
+    });
+  }
+
+  let activeInputFieldId = null;
+  $('input[data-picker-title]').on('click', function () {
+    activeInputFieldId = $(this).attr('id');
+    const existing = $(this).val().trim();
+    persistentFolders = existing.length > 0 ? existing.split(',').map(s => s.trim()) : [];
+    selectedFolders = []; accumulatedFolders = [];
+    $('#folderPickerTitle').text($(this).data('picker-title'));
+    $('#folderPickerModal').show();
+    const savedPath = $(this).val();
+    loadFolders(savedPath && savedPath.startsWith('/mnt') ? savedPath : '/mnt');
+  });
+
+  $('#closeFolderPicker').on('click', function () { $('#newFolderInputWrap').hide(); $('#newFolderName').val(''); $('#folderPickerModal').hide(); });
+
+  $('#confirmFolderSelection').off('click').on('click', function (e) {
+    e.preventDefault();
+    if (!activeInputFieldId) return;
+    $('#' + activeInputFieldId).val(persistentFolders.join(',')).trigger('change');
+    $('#folderPickerModal').hide();
+  });
+
+  $('#createFolderBtn').on('click', function () { $('#newFolderInputWrap').show(); $('#newFolderName').val('').focus(); });
+  $('#newFolderCancel').on('click', function () { $('#newFolderInputWrap').hide(); $('#newFolderName').val(''); });
+  $('#newFolderOk').on('click', function () {
+    const name = $('#newFolderName').val().trim(); if (!name) return;
+    $.post('/plugins/unraid-backup-tools/flash-backup/helpers/create_folder.php', { path: currentPath, name, csrf_token: csrf_token }, function (res) {
+      if (res.success) { $('#newFolderInputWrap').hide(); $('#newFolderName').val(''); loadFolders(currentPath); } else alert(res.error || 'Failed to create folder');
+    }, 'json');
+  });
+
+  let remotePathTimer = null;
+  $('#remote_path_in_config').on('input', function () {
+    let val = $(this).val(); if (val.trim() === '') { clearTimeout(remotePathTimer); return; }
+    val = val.replace(/\/+/g, '/'); if (!val.startsWith('/')) val = '/' + val; $(this).val(val);
+    clearTimeout(remotePathTimer);
+    remotePathTimer = setTimeout(() => { let v = $('#remote_path_in_config').val().trim(); if (v && !v.endsWith('/')) $('#remote_path_in_config').val(v + '/'); }, 2000);
+  });
+  $('#remote_path_in_config').on('blur', function () {
+    let val = $(this).val().trim(); if (!val) return;
+    val = val.replace(/\/+/g, '/'); if (!val.startsWith('/')) val = '/' + val; if (!val.endsWith('/')) val += '/'; $(this).val(val);
+  });
+  $(function () { let val = $('#remote_path_in_config').val().trim(); if (!val) return; val = val.replace(/\/+/g, '/'); if (!val.startsWith('/')) val = '/' + val; if (!val.endsWith('/')) val += '/'; $('#remote_path_in_config').val(val); });
+</script>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    const multiselect = document.getElementById('rclone_config_remote');
+    const hiddenSelect = document.getElementById('rclone_config_remote_hidden');
+    const placeholder = multiselect.querySelector('.selected-placeholder');
+    const optionsContainer = multiselect.querySelector('.options-container');
+    const options = optionsContainer.querySelectorAll('.option');
+    const selectAllBtn = optionsContainer.querySelector('.select-all');
+    const clearAllBtn = optionsContainer.querySelector('.clear-all');
+
+    function updatePlaceholder() {
+      const selectedValues = [...hiddenSelect.options].filter(o => o.selected).map(o => o.value);
+      placeholder.textContent = selectedValues.length ? selectedValues.join(', ') : 'Select config(s)';
+    }
+
+    selectAllBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      options.forEach(opt => { opt.classList.add('selected'); const ho = [...hiddenSelect.options].find(o => o.value === opt.dataset.value); if (ho) ho.selected = true; });
+      updatePlaceholder(); updateB2BucketVisibility();
+    });
+
+    clearAllBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      options.forEach(opt => opt.classList.remove('selected'));
+      [...hiddenSelect.options].forEach(o => o.selected = false);
+      updatePlaceholder(); updateB2BucketVisibility();
+    });
+
+    multiselect.addEventListener('click', () => {
+      optionsContainer.style.display = optionsContainer.style.display === 'block' ? 'none' : 'block';
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!multiselect.contains(e.target)) optionsContainer.style.display = 'none';
+    });
+
+    options.forEach(opt => {
+      const value = opt.dataset.value;
+      if ([...hiddenSelect.options].find(o => o.value === value && o.selected)) opt.classList.add('selected');
+      opt.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const ho = [...hiddenSelect.options].find(o => o.value === value);
+        if (ho.selected) { ho.selected = false; opt.classList.remove('selected'); } else { ho.selected = true; opt.classList.add('selected'); }
+        const selectedValues = [...hiddenSelect.options].filter(o => o.selected).map(o => o.value);
+        placeholder.textContent = selectedValues.length ? selectedValues.join(', ') : 'Select config(s)';
+        hiddenSelect.dispatchEvent(new Event('change'));
+        updateB2BucketVisibility();
+      });
+    });
+
+    updateB2BucketVisibility();
+  });
+</script>
+
+<script>
+  function loadLastRunLog() {
+    const logEl = document.getElementById('last-run-log');
+    fetch('/plugins/unraid-backup-tools/flash-backup/helpers/fetch_last_run_log.php')
+      .then(resp => resp.text()).then(text => { logEl.textContent = text || 'Flash backup log not found'; })
+      .catch(err => { console.error('Failed to load log', err); logEl.textContent = 'Failed to load log'; });
+  }
+  document.addEventListener('DOMContentLoaded', loadLastRunLog);
+
+  document.getElementById('copy-last-run-log').addEventListener('click', function () {
+    const logEl = document.getElementById('last-run-log');
+    const text = logEl.innerText || logEl.textContent;
+    if (!text || text.trim() === '' || text.includes('not found')) { alert('Flash backup log is empty or not loaded yet'); return; }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => showCopiedFeedback(this)).catch(err => { console.warn('Clipboard API failed', err); fallbackCopyText(text, this); });
+    } else { fallbackCopyText(text, this); }
+  });
+
+  function fallbackCopyText(text, btn) {
+    const textarea = document.createElement('textarea'); textarea.value = text; document.body.appendChild(textarea); textarea.select();
+    try { document.execCommand('copy'); showCopiedFeedback(btn); } catch (err) { console.error('Fallback copy failed', err); alert('Failed to copy log'); }
+    document.body.removeChild(textarea);
+  }
+
+  function showCopiedFeedback(btn) {
+    const original = btn.textContent; btn.textContent = 'Copied!'; btn.disabled = true;
+    setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1200);
+  }
+</script>
+
+<script>
+  (function () {
+    const CHECK_INTERVAL = 1000;
+    function updateRunButtons(locked) {
+      document.querySelectorAll('.run-schedule-btn').forEach(btn => { btn.disabled = locked; if (locked) btn.classList.add('disabled'); else btn.classList.remove('disabled'); });
+    }
+    async function pollLock() {
+      try { const res = await fetch('/plugins/unraid-backup-tools/flash-backup/helpers/check_lock.php'); const data = await res.json(); updateRunButtons(Boolean(data.locked)); } catch (e) { console.error('Failed to check lock:', e); }
+    }
+    pollLock(); setInterval(pollLock, CHECK_INTERVAL);
+  })();
+
+  function debounceButton(btn, delay = 1000) {
+    let cooling = false;
+    btn.addEventListener('click', function () { if (cooling) return; cooling = true; setTimeout(() => cooling = false, delay); });
+  }
+
+  ['backupbtn', 'restorebtn', 'schedule-backup', 'cancelEditBtn', 'clear-last-run-log', 'copy-last-run-log',
+    'confirmFolderSelection', 'closeFolderPicker', 'backupbtn_remote', 'schedule-local-backup',
+    'schedule-remote-backup', 'cancelEditBtnremote', 'clearSelectedFolders'
+  ].forEach(id => { const btn = document.getElementById(id); if (btn) debounceButton(btn); });
+</script>
