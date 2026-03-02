@@ -1,0 +1,73 @@
+<?xml version='1.0' standalone='yes'?>
+<!DOCTYPE PLUGIN>
+
+<PLUGIN
+  name="unraid-backup-tools"
+  author="jcofer555"
+  version="2026.03.01.01"
+  launch="Settings/unraid-backup-tools"
+  pluginURL="https://raw.githubusercontent.com/jcofer555/unraid-backup-tools/main/plugin/unraid-backup-tools.plg"
+  support="https://forums.unraid.net/"
+  min="7.1.0"
+  icon="icon.png"
+>
+
+<CHANGES>
+<![CDATA[
+
+### 2026.03.01.01
+
+- Initial release: wraps Flash Backup and VM Backup & Restore under a single control plane plugin.
+
+]]>
+</CHANGES>
+
+<FILE Run="/bin/bash">
+<INLINE>
+<![CDATA[
+#!/bin/bash
+set -euo pipefail
+
+JCP_CFG_DIR="/boot/config/plugins/unraid-backup-tools"
+JCP_EMHTTP="/usr/local/emhttp/plugins/unraid-backup-tools"
+WHICH_CFG="${JCP_CFG_DIR}/which-plugin.cfg"
+
+mkdir -p "${JCP_CFG_DIR}/flash-backup" "${JCP_CFG_DIR}/vm-backup-and-restore"
+
+if [ ! -f "${WHICH_CFG}" ]; then
+    echo 'WHICH_PLUGIN="flash-backup"' > "${WHICH_CFG}"
+fi
+
+for pair in \
+    "${JCP_CFG_DIR}/flash-backup/settings.cfg:${JCP_EMHTTP}/flash-backup/helpers/default_settings.cfg" \
+    "${JCP_CFG_DIR}/flash-backup/settings_remote.cfg:${JCP_EMHTTP}/flash-backup/helpers/default_settings_remote.cfg" \
+    "${JCP_CFG_DIR}/vm-backup-and-restore/settings.cfg:${JCP_EMHTTP}/vm-backup-and-restore/helpers/default_settings.cfg" \
+    "${JCP_CFG_DIR}/vm-backup-and-restore/settings_restore.cfg:${JCP_EMHTTP}/vm-backup-and-restore/helpers/defatult_settings_restore.cfg"
+do
+    dest="${pair%%:*}"; src="${pair##*:}"
+    if [ ! -f "${dest}" ] && [ -f "${src}" ]; then cp "${src}" "${dest}"; fi
+done
+
+chmod +x "${JCP_EMHTTP}/flash-backup/helpers/"*.sh 2>/dev/null || true
+chmod +x "${JCP_EMHTTP}/vm-backup-and-restore/helpers/"*.sh 2>/dev/null || true
+mkdir -p /tmp/unraid-backup-tools/flash-backup /tmp/unraid-backup-tools/vm-backup-and-restore
+
+echo ""
+echo "----------------------------------------------------"
+echo " Unraid Backup Tools installed — Version: 2026.03.01.01"
+echo "----------------------------------------------------"
+echo ""
+]]>
+</INLINE>
+</FILE>
+
+<FILE Run="/bin/bash" Method="remove">
+<INLINE>
+<![CDATA[
+rm -rf /usr/local/emhttp/plugins/unraid-backup-tools
+rm -rf /boot/config/plugins/unraid-backup-tools
+]]>
+</INLINE>
+</FILE>
+
+</PLUGIN>

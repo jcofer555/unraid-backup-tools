@@ -1,0 +1,193 @@
+Menu="Utilities"
+Type="xmenu"
+Title="Unraid Backup Tools"
+Icon="icon.png"
+Tag="icon.png"
+Markdown="false"
+---
+<?php
+// ============================================================
+// Unraid Backup Tools — Plugin Selector
+// Deterministic, auditable, atomic per unified-jonathan-weighted-skill
+// ============================================================
+
+$jcpCfgDir  = '/boot/config/plugins/unraid-backup-tools';
+$whichCfg   = $jcpCfgDir . '/which-plugin.cfg';
+$allowedPlugins = ['flash-backup', 'vm-backup-and-restore'];
+
+// Read saved plugin selection — deterministic default to flash-backup
+$selectedPlugin = 'flash-backup';
+if (file_exists($whichCfg)) {
+    $parsed = parse_ini_file($whichCfg);
+    if (!empty($parsed['WHICH_PLUGIN']) && in_array($parsed['WHICH_PLUGIN'], $allowedPlugins, true)) {
+        $selectedPlugin = $parsed['WHICH_PLUGIN'];
+    }
+}
+?>
+
+<style>
+  /* ============================================================
+     JCP Plugin Selector Bar — namespaced to avoid collisions
+  ============================================================ */
+  .jcp-selector-bar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 14px;
+    background: #111;
+    border-radius: 10px;
+    box-shadow: 0 0 10px rgba(46,204,64,.25);
+    margin-bottom: 14px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .jcp-selector-bar label {
+    color: #2ECC40;
+    font-weight: bold;
+    white-space: nowrap;
+    margin: 0;
+  }
+  .jcp-selector-bar select {
+    background: #111;
+    border: 1px solid #2ECC40;
+    border-radius: 5px;
+    color: #fff;
+    padding: 6px 10px;
+    font-size: 1em;
+    cursor: pointer;
+    min-width: 220px;
+  }
+  .jcp-selector-bar select:focus {
+    outline: 2px solid #2ECC40;
+  }
+  .jcp-selector-bar .jcp-save-btn {
+    background: #2ECC40;
+    border: none;
+    border-radius: 4px;
+    color: #000;
+    cursor: pointer;
+    font-weight: bold;
+    padding: 7px 18px;
+    font-size: 0.97em;
+    transition: filter 0.15s;
+  }
+  .jcp-selector-bar .jcp-save-btn:hover { filter: brightness(1.15); }
+  .jcp-selector-bar .jcp-save-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  #jcp-switch-toast {
+    display: none;
+    background: #2ECC40;
+    color: #000;
+    font-weight: bold;
+    padding: 5px 12px;
+    border-radius: 4px;
+    font-size: 0.92em;
+    margin-left: 8px;
+  }
+  #jcp-plugin-panel {
+    width: 100%;
+  }
+</style>
+
+<!-- ============================================================
+     JCP Plugin Selector Bar
+============================================================ -->
+<div class="jcp-selector-bar">
+  <label for="jcp-plugin-select">Plugin:</label>
+  <select id="jcp-plugin-select">
+    <option value="flash-backup"<?php echo $selectedPlugin === 'flash-backup' ? ' selected' : ''; ?>>Flash Backup</option>
+    <option value="vm-backup-and-restore"<?php echo $selectedPlugin === 'vm-backup-and-restore' ? ' selected' : ''; ?>>VM Backup &amp; Restore</option>
+  </select>
+  <button type="button" class="jcp-save-btn" id="jcp-save-plugin-btn">Switch Plugin</button>
+  <span id="jcp-switch-toast">Switching...</span>
+</div>
+
+<!-- ============================================================
+     Active Plugin Panel — renders selected plugin content
+============================================================ -->
+<div id="jcp-plugin-panel">
+<?php
+// Deterministic conditional include — only selected plugin content is rendered
+// This avoids DOM/JS collisions between the two plugins.
+$pluginPageMap = [
+    'flash-backup'           => __DIR__ . '/flash-backup/flash-backup-content.php',
+    'vm-backup-and-restore'  => __DIR__ . '/vm-backup-and-restore/vm-backup-and-restore-content.php',
+];
+
+$contentFile = $pluginPageMap[$selectedPlugin] ?? null;
+if ($contentFile && file_exists($contentFile)) {
+    include $contentFile;
+} else {
+    echo '<p style="color:red;">Plugin content not found: ' . htmlspecialchars($selectedPlugin) . '</p>';
+}
+?>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ============================================================
+  // JCP Plugin Selector — explicit state machine
+  // States: IDLE → SAVING → RELOADING
+  // ============================================================
+
+  /** @type {'IDLE'|'SAVING'|'RELOADING'} */
+  var STATE = 'IDLE';
+
+  var select  = document.getElementById('jcp-plugin-select');
+  var saveBtn = document.getElementById('jcp-save-plugin-btn');
+  var toast   = document.getElementById('jcp-switch-toast');
+
+  function setState(s) {
+    STATE = s;
+    if (s === 'IDLE') {
+      saveBtn.disabled = false;
+      toast.style.display = 'none';
+    } else if (s === 'SAVING') {
+      saveBtn.disabled = true;
+      toast.textContent = 'Switching…';
+      toast.style.display = 'inline-block';
+    } else if (s === 'RELOADING') {
+      saveBtn.disabled = true;
+      toast.textContent = 'Reloading page…';
+      toast.style.display = 'inline-block';
+    }
+  }
+
+  saveBtn.addEventListener('click', function () {
+    if (STATE !== 'IDLE') return; // guard against re-entry
+    var plugin = select.value;
+    setState('SAVING');
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/plugins/unraid-backup-tools/helpers/save_which_plugin.php', true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.timeout = 8000;
+
+    xhr.onload = function () {
+      try {
+        var res = JSON.parse(xhr.responseText);
+        if (res.status === 'ok') {
+          setState('RELOADING');
+          window.location.reload();
+        } else {
+          setState('IDLE');
+          alert('Failed to save plugin selection: ' + (res.message || 'Unknown error'));
+        }
+      } catch (e) {
+        setState('IDLE');
+        alert('Unexpected response from server');
+      }
+    };
+
+    xhr.onerror = xhr.ontimeout = function () {
+      setState('IDLE');
+      alert('Network error saving plugin selection');
+    };
+
+    xhr.send('plugin=' + encodeURIComponent(plugin));
+  });
+
+  setState('IDLE');
+})();
+</script>
