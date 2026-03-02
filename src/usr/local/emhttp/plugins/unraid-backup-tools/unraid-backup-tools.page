@@ -106,11 +106,14 @@ if (file_exists($whichCfg)) {
 ============================================================ -->
 <div id="jcp-plugin-panel">
 <?php
-// Deterministic conditional include — only selected plugin content is rendered
-// This avoids DOM/JS collisions between the two plugins.
+// Deterministic conditional include — only selected plugin content is rendered.
+// __DIR__ is unreliable in Unraid .page files (the framework includes them from
+// its own working directory). Use the absolute install path instead.
+$pluginEmhttpDir = '/usr/local/emhttp/plugins/unraid-backup-tools';
+
 $pluginPageMap = [
-    'flash-backup'           => __DIR__ . '/flash-backup/flash-backup-content.php',
-    'vm-backup-and-restore'  => __DIR__ . '/vm-backup-and-restore/vm-backup-and-restore-content.php',
+    'flash-backup'          => $pluginEmhttpDir . '/flash-backup/flash-backup-content.php',
+    'vm-backup-and-restore' => $pluginEmhttpDir . '/vm-backup-and-restore/vm-backup-and-restore-content.php',
 ];
 
 $contentFile = $pluginPageMap[$selectedPlugin] ?? null;
