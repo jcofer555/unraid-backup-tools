@@ -4,7 +4,7 @@
 <PLUGIN 
   name="unraid-backup-tools"
   author="jcofer555"
-  version="2026.03.02.02"
+  version="2026.03.02.03"
   launch="Settings/unraid-backup-tools"
   pluginURL="https://raw.githubusercontent.com/jcofer555/unraid-backup-tools/main/plugin/unraid-backup-tools.plg"
   support="https://forums.unraid.net/"
@@ -16,6 +16,10 @@
 <CHANGES>
 <![CDATA[
 
+### 2026.03.02.03
+
+- kjk
+
 ### 2026.03.02.02
 
 - 1
@@ -25,9 +29,9 @@ For older releases, see https://github.com/jcofer555/unraid-backup-tools/release
 ]]>
 </CHANGES>
 
-<FILE Name="/boot/config/plugins/unraid-backup-tools/unraid-backup-tools-2026.03.02.02-noarch-1.txz">
-<URL>https://github.com/jcofer555/unraid-backup-tools/releases/download/2026.03.02.02/unraid-backup-tools-2026.03.02.02-noarch-1.txz</URL>
-<SHA256>445594c247484a2591289ba9bb44c6f217ec588d39037235ade1ff6074ef212c</SHA256>
+<FILE Name="/boot/config/plugins/unraid-backup-tools/unraid-backup-tools-2026.03.02.03-noarch-1.txz">
+<URL>https://github.com/jcofer555/unraid-backup-tools/releases/download/2026.03.02.03/unraid-backup-tools-2026.03.02.03-noarch-1.txz</URL>
+<SHA256>57f99287cdb2cf6cda8512dbdbf02768242df39301e89b5d28e85f3311adcbde</SHA256>
 </FILE>
 
 <!-- ==========================================================
@@ -43,7 +47,7 @@ set -euo pipefail
 #  INSTALL / UPGRADE LOGIC
 # ==========================================================
 
-PACKAGE_TXZ="/boot/config/plugins/unraid-backup-tools/unraid-backup-tools-2026.03.02.02-noarch-1.txz"
+PACKAGE_TXZ="/boot/config/plugins/unraid-backup-tools/unraid-backup-tools-2026.03.02.03-noarch-1.txz"
 JCP_CFG_DIR="/boot/config/plugins/unraid-backup-tools"
 JCP_EMHTTP="/usr/local/emhttp/plugins/unraid-backup-tools"
 
@@ -246,13 +250,13 @@ mkdir -p /tmp/unraid-backup-tools/vm-backup-and-restore
 # ----------------------------------------------------------
 find /boot/config/plugins/unraid-backup-tools/ -maxdepth 1 -type f \
     -name "unraid-backup-tools-*.txz" \
-    ! -name "unraid-backup-tools-2026.03.02.02-noarch-1.txz" \
+    ! -name "unraid-backup-tools-2026.03.02.03-noarch-1.txz" \
     -delete
 
 echo ""
 echo "----------------------------------------------------"
 echo " unraid-backup-tools has been installed."
-echo " Version: 2026.03.02.02"
+echo " Version: 2026.03.02.03"
 echo "----------------------------------------------------"
 echo ""
 
