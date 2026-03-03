@@ -4,7 +4,7 @@
 <PLUGIN
   name="unraid-backup-tools"
   author="jcofer555"
-  version="2026.03.03.07"
+  version="2026.03.03.08"
   launch="Settings/unraid-backup-tools"
   pluginURL="https://raw.githubusercontent.com/jcofer555/unraid-backup-tools/main/plugin/unraid-backup-tools.plg"
   support="https://forums.unraid.net/topic/unraid-backup-tools/"
@@ -16,6 +16,10 @@
 <CHANGES>
 <![CDATA[
 
+### 2026.03.03.08
+
+- 1
+
 ### 2026.03.03.07
 
 - 1
@@ -24,18 +28,14 @@
 
 - 1
 
-### 2026.03.03.05
-
-- 1
-
 
 For older releases, see https://github.com/jcofer555/unraid-backup-tools/releases
 ]]>
 </CHANGES>
 
-<FILE Name="/boot/config/plugins/unraid-backup-tools/unraid-backup-tools-2026.03.03.07-noarch-1.txz">
-<URL>https://github.com/jcofer555/unraid-backup-tools/releases/download/2026.03.03.07/unraid-backup-tools-2026.03.03.07-noarch-1.txz</URL>
-<SHA256>503fcf3e325ae5e8d00f55314a002da929e5c23e84fede521ac2b487aac4c3cb</SHA256>
+<FILE Name="/boot/config/plugins/unraid-backup-tools/unraid-backup-tools-2026.03.03.08-noarch-1.txz">
+<URL>https://github.com/jcofer555/unraid-backup-tools/releases/download/2026.03.03.08/unraid-backup-tools-2026.03.03.08-noarch-1.txz</URL>
+<SHA256>2880fc93118fb63661e35aca27b4017b0a1825ad93975bea881d161942454c53</SHA256>
 </FILE>
 
 <!-- ==========================================================
@@ -44,7 +44,7 @@ For older releases, see https://github.com/jcofer555/unraid-backup-tools/release
 <FILE Run="/bin/bash">
 <INLINE>
 <![CDATA[
-PACKAGE_TXZ="/boot/config/plugins/unraid-backup-tools/unraid-backup-tools-2026.03.03.07-noarch-1.txz"
+PACKAGE_TXZ="/boot/config/plugins/unraid-backup-tools/unraid-backup-tools-2026.03.03.08-noarch-1.txz"
 
 FLASH_CFG="/boot/config/plugins/unraid-backup-tools/flash-backup/flash-backup.cfg"
 VM_CFG="/boot/config/plugins/unraid-backup-tools/vm-backup-and-restore/vm-backup.cfg"
@@ -143,12 +143,12 @@ chmod +x /usr/local/emhttp/plugins/unraid-backup-tools/scripts/stop.sh   2>/dev/
 # ── Remove old packages ───────────────────────────────────────
 find /boot/config/plugins/unraid-backup-tools/ -maxdepth 1 -type f \
     -name "unraid-backup-tools-*.txz" \
-    ! -name "unraid-backup-tools-2026.03.03.07-noarch-1.txz" \
+    ! -name "unraid-backup-tools-2026.03.03.08-noarch-1.txz" \
     -delete
 
 echo ""
 echo "----------------------------------------------------"
-echo " unraid-backup-tools installed — version 2026.03.03.07"
+echo " unraid-backup-tools installed — version 2026.03.03.08"
 echo "----------------------------------------------------"
 echo ""
 ]]>
