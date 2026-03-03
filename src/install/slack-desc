@@ -1,0 +1,19 @@
+# HOW TO EDIT THIS FILE:
+# The "handy ruler" below makes it easier to edit a package description.
+# Line up the first '|' above the ':' following the base package name, and
+# the '|' on the right side marks the last column you can put a character in.
+# You must make exactly 11 lines for the formatting to be correct.  It's also
+# customary to leave one space after the ':' except on otherwise blank lines.
+
+                    |-----handy-ruler------------------------------------------------------|
+unraid-backup-tools: unraid-backup-tools (Unified backup tools for Unraid)
+unraid-backup-tools:
+unraid-backup-tools: Combines Flash Backup (local and remote) and VM Backup and Restore
+unraid-backup-tools: into a single WebUI tab with a unified backend script.
+unraid-backup-tools:
+unraid-backup-tools: Features:
+unraid-backup-tools:  - Flash backup to local path or remote host via rsync/SSH
+unraid-backup-tools:  - VM backup with stop, snapshot, and live modes
+unraid-backup-tools:  - VM restore from archive with confirmation safeguards
+unraid-backup-tools:  - Structured rotating logs, retention pruning, stop handling
+unraid-backup-tools:
