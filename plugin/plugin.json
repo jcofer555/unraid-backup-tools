@@ -1,9 +1,0 @@
-{
-    "name": "unraid-backup-tools",
-    "package_name": "unraid-backup-tools",
-    "author": "jcofer555",
-    "icon": "icon.png",
-    "support": "https://forums.unraid.net/",
-    "min": "7.1.0",
-    "launch": "Settings/unraid-backup-tools"
-}
