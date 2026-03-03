@@ -1,0 +1,179 @@
+<?xml version='1.0' standalone='yes'?>
+<!DOCTYPE PLUGIN>
+
+<PLUGIN
+  name="unraid-backup-tools"
+  author="jcofer555"
+  version="2026.03.03.07"
+  launch="Settings/unraid-backup-tools"
+  pluginURL="https://raw.githubusercontent.com/jcofer555/unraid-backup-tools/main/plugin/unraid-backup-tools.plg"
+  support="https://forums.unraid.net/topic/unraid-backup-tools/"
+  min="6.9.0"
+  
+  icon="icon.png"
+>
+
+<CHANGES>
+<![CDATA[
+
+### 2026.03.03.07
+
+- 1
+
+### 2026.03.03.06
+
+- 1
+
+### 2026.03.03.05
+
+- 1
+
+
+For older releases, see https://github.com/jcofer555/unraid-backup-tools/releases
+]]>
+</CHANGES>
+
+<FILE Name="/boot/config/plugins/unraid-backup-tools/unraid-backup-tools-2026.03.03.07-noarch-1.txz">
+<URL>https://github.com/jcofer555/unraid-backup-tools/releases/download/2026.03.03.07/unraid-backup-tools-2026.03.03.07-noarch-1.txz</URL>
+<SHA256>503fcf3e325ae5e8d00f55314a002da929e5c23e84fede521ac2b487aac4c3cb</SHA256>
+</FILE>
+
+<!-- ==========================================================
+     INSTALL / UPGRADE SCRIPT
+========================================================== -->
+<FILE Run="/bin/bash">
+<INLINE>
+<![CDATA[
+PACKAGE_TXZ="/boot/config/plugins/unraid-backup-tools/unraid-backup-tools-2026.03.03.07-noarch-1.txz"
+
+FLASH_CFG="/boot/config/plugins/unraid-backup-tools/flash-backup/flash-backup.cfg"
+VM_CFG="/boot/config/plugins/unraid-backup-tools/vm-backup-and-restore/vm-backup.cfg"
+WHICH_CFG="/boot/config/plugins/unraid-backup-tools/which-plugin.cfg"
+
+FLASH_DEFAULT_CFG="/usr/local/emhttp/plugins/unraid-backup-tools/helpers/default_flash.cfg"
+VM_DEFAULT_CFG="/usr/local/emhttp/plugins/unraid-backup-tools/helpers/default_vm.cfg"
+
+TMP_FLASH="/tmp/unraid-backup-tools_flash.tmp"
+TMP_VM="/tmp/unraid-backup-tools_vm.tmp"
+
+upgradepkg --install-new "$PACKAGE_TXZ"
+
+# which-plugin: only written on first install
+if [ ! -f "$WHICH_CFG" ]; then
+    echo "SELECTED_TOOL=flash-local" > "$WHICH_CFG"
+fi
+
+# ── Flash config ──────────────────────────────────────────────
+ordered_flash_keys=(
+    "FLASH_LOCAL_DEST"
+    "FLASH_LOCAL_RETENTION"
+    "FLASH_LOCAL_COMPRESS"
+    "FLASH_LOCAL_INCLUDE"
+    "FLASH_LOCAL_EXCLUDE"
+    "FLASH_LOCAL_DRY_RUN"
+    "FLASH_LOCAL_DISCORD"
+    "FLASH_REMOTE_HOST"
+    "FLASH_REMOTE_USER"
+    "FLASH_REMOTE_KEY"
+    "FLASH_REMOTE_DEST"
+    "FLASH_REMOTE_BW_LIMIT"
+    "FLASH_REMOTE_RETENTION"
+    "FLASH_REMOTE_DRY_RUN"
+)
+
+mkdir -p "$(dirname "$FLASH_CFG")"
+
+if [ ! -f "$FLASH_CFG" ]; then
+    cp "$FLASH_DEFAULT_CFG" "$FLASH_CFG"
+else
+    while IFS='=' read -r key val; do
+        [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+        if ! grep -q -E "^[[:space:]]*${key}[[:space:]]*=" "$FLASH_CFG"; then
+            echo "$key=$val" >> "$FLASH_CFG"
+        fi
+    done < "$FLASH_DEFAULT_CFG"
+fi
+
+{ for key in "${ordered_flash_keys[@]}"; do
+    grep -E "^[[:space:]]*${key}[[:space:]]*=" "$FLASH_CFG" || true
+  done
+} > "$TMP_FLASH" && mv "$TMP_FLASH" "$FLASH_CFG"
+
+# ── VM config ─────────────────────────────────────────────────
+ordered_vm_keys=(
+    "VM_BACKUP_VMS"
+    "VM_BACKUP_DEST"
+    "VM_BACKUP_MODE"
+    "VM_BACKUP_COMPRESS"
+    "VM_BACKUP_RETENTION"
+    "VM_BACKUP_INCLUDE_LIBVIRT"
+    "VM_BACKUP_AUTOSTART"
+    "VM_BACKUP_DRY_RUN"
+    "VM_RESTORE_FILE"
+    "VM_RESTORE_TARGET"
+    "VM_RESTORE_OVERWRITE"
+    "VM_RESTORE_DISKS"
+    "VM_RESTORE_CONFIG"
+    "VM_RESTORE_DRY_RUN"
+)
+
+mkdir -p "$(dirname "$VM_CFG")"
+
+if [ ! -f "$VM_CFG" ]; then
+    cp "$VM_DEFAULT_CFG" "$VM_CFG"
+else
+    while IFS='=' read -r key val; do
+        [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+        if ! grep -q -E "^[[:space:]]*${key}[[:space:]]*=" "$VM_CFG"; then
+            echo "$key=$val" >> "$VM_CFG"
+        fi
+    done < "$VM_DEFAULT_CFG"
+fi
+
+{ for key in "${ordered_vm_keys[@]}"; do
+    grep -E "^[[:space:]]*${key}[[:space:]]*=" "$VM_CFG" || true
+  done
+} > "$TMP_VM" && mv "$TMP_VM" "$VM_CFG"
+
+# ── Runtime setup ─────────────────────────────────────────────
+mkdir -p /boot/logs/unraid-backup-tools
+chmod +x /usr/local/emhttp/plugins/unraid-backup-tools/scripts/backup.sh 2>/dev/null || true
+chmod +x /usr/local/emhttp/plugins/unraid-backup-tools/scripts/stop.sh   2>/dev/null || true
+
+# ── Remove old packages ───────────────────────────────────────
+find /boot/config/plugins/unraid-backup-tools/ -maxdepth 1 -type f \
+    -name "unraid-backup-tools-*.txz" \
+    ! -name "unraid-backup-tools-2026.03.03.07-noarch-1.txz" \
+    -delete
+
+echo ""
+echo "----------------------------------------------------"
+echo " unraid-backup-tools installed — version 2026.03.03.07"
+echo "----------------------------------------------------"
+echo ""
+]]>
+</INLINE>
+</FILE>
+
+<!-- ==========================================================
+     REMOVE SCRIPT
+========================================================== -->
+<FILE Run="/bin/bash" Method="remove">
+<INLINE>
+<![CDATA[
+if [ -f /tmp/unraid-backup-tools.lock ]; then
+    touch /tmp/unraid-backup-tools.stop
+    sleep 3
+fi
+rm -f /tmp/unraid-backup-tools.lock
+rm -f /tmp/unraid-backup-tools.stop
+removepkg unraid-backup-tools
+rm -rf /usr/local/emhttp/plugins/unraid-backup-tools
+# Config and logs preserved intentionally:
+# /boot/config/plugins/unraid-backup-tools/
+# /boot/logs/unraid-backup-tools/
+]]>
+</INLINE>
+</FILE>
+
+</PLUGIN>
