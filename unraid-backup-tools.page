@@ -1,0 +1,722 @@
+Menu="Utilities"
+Title="Backup Tools"
+Tag="icon-backup"
+---
+<?php
+// ============================================================
+// unraid-backup-tools — Main WebUI Page
+// Author: Jon C
+// Arch: Deterministic, atomic, auditable (unified-jonathan-weighted-skill)
+// ============================================================
+
+// ── Constants ───────────────────────────────────────────────
+define('UBT_PLUGIN',       'unraid-backup-tools');
+define('UBT_CONFIG_BASE',  '/boot/config/plugins/unraid-backup-tools');
+define('UBT_LOCK',         '/tmp/unraid-backup-tools.lock');
+define('UBT_STOP',         '/tmp/unraid-backup-tools.stop');
+define('UBT_LOG_DIR',      '/boot/logs/unraid-backup-tools');
+define('UBT_SCRIPT',       '/usr/local/emhttp/plugins/unraid-backup-tools/scripts/backup.sh');
+define('UBT_STOP_SCRIPT',  '/usr/local/emhttp/plugins/unraid-backup-tools/scripts/stop.sh');
+define('UBT_WHICH_CFG',    UBT_CONFIG_BASE . '/which-plugin.cfg');
+define('UBT_FLASH_CFG',    UBT_CONFIG_BASE . '/flash-backup/flash-backup.cfg');
+define('UBT_VM_CFG',       UBT_CONFIG_BASE . '/vm-backup-and-restore/vm-backup.cfg');
+define('UBT_ASSET_BASE',   '/plugins/unraid-backup-tools/assets');
+
+// ── Helpers ──────────────────────────────────────────────────
+
+/**
+ * Parse a simple KEY=VALUE config file into an associative array.
+ */
+function ubt_parse_cfg(string $path): array {
+    if (!file_exists($path)) {
+        return [];
+    }
+    $cfg = [];
+    foreach (file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+        $line = trim($line);
+        if ($line === '' || $line[0] === '#') {
+            continue;
+        }
+        $parts = explode('=', $line, 2);
+        if (count($parts) === 2) {
+            $cfg[trim($parts[0])] = trim($parts[1]);
+        }
+    }
+    return $cfg;
+}
+
+/**
+ * Write an associative array back to a KEY=VALUE config file.
+ * All keys are sorted for auditability.
+ */
+function ubt_write_cfg(string $path, array $data): bool {
+    $dir = dirname($path);
+    if (!is_dir($dir)) {
+        mkdir($dir, 0755, true);
+    }
+    ksort($data);
+    $lines = [];
+    foreach ($data as $k => $v) {
+        $lines[] = $k . '=' . $v;
+    }
+    return file_put_contents($path, implode("\n", $lines) . "\n", LOCK_EX) !== false;
+}
+
+/**
+ * Sanitize a config value to prevent injection.
+ * Strips shell meta-characters not expected in paths/names.
+ */
+function ubt_sanitize(string $val, string $type = 'text'): string {
+    $val = trim($val);
+    switch ($type) {
+        case 'path':
+            // Allow alphanumeric, slash, dash, underscore, dot, space
+            return preg_replace('/[^a-zA-Z0-9\/\-_. ]/', '', $val);
+        case 'host':
+            return preg_replace('/[^a-zA-Z0-9.\-]/', '', $val);
+        case 'user':
+            return preg_replace('/[^a-zA-Z0-9_\-.]/', '', $val);
+        case 'int':
+            return (string)(int)$val;
+        case 'bool':
+            return in_array(strtolower($val), ['yes', 'true', '1'], true) ? 'yes' : 'no';
+        default:
+            // General text: strip shell metacharacters
+            return preg_replace('/[`$;|&<>!]/', '', $val);
+    }
+}
+
+/**
+ * Return the currently running backup mode, or empty string if idle.
+ */
+function ubt_running_mode(): string {
+    if (!file_exists(UBT_LOCK)) {
+        return '';
+    }
+    $content = trim(file_get_contents(UBT_LOCK));
+    return $content ?: 'unknown';
+}
+
+/**
+ * List recent log files for the given mode, newest first.
+ */
+function ubt_log_files(string $mode, int $max = 10): array {
+    $pattern = UBT_LOG_DIR . '/' . $mode . '_*.log';
+    $files   = glob($pattern) ?: [];
+    rsort($files);
+    return array_slice($files, 0, $max);
+}
+
+/**
+ * Detect available VMs from libvirt.
+ */
+function ubt_list_vms(): array {
+    $output = [];
+    exec('virsh list --all --name 2>/dev/null', $output);
+    return array_filter(array_map('trim', $output), fn($v) => $v !== '');
+}
+
+// ── Handle POST (save config or trigger action) ──────────────
+
+$page_message = '';
+$page_error   = '';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $action = $_POST['ubt_action'] ?? '';
+
+    // ── Save Flash Config ────────────────────────────────────
+    if ($action === 'save_flash') {
+        $cfg = ubt_parse_cfg(UBT_FLASH_CFG);
+        $cfg['FLASH_LOCAL_DEST']       = ubt_sanitize($_POST['flash_local_dest']       ?? '', 'path');
+        $cfg['FLASH_LOCAL_RETENTION']  = ubt_sanitize($_POST['flash_local_retention']  ?? '5', 'int');
+        $cfg['FLASH_LOCAL_COMPRESS']   = ubt_sanitize($_POST['flash_local_compress']   ?? 'no', 'bool');
+        $cfg['FLASH_LOCAL_INCLUDE']    = ubt_sanitize($_POST['flash_local_include']    ?? '', 'path');
+        $cfg['FLASH_LOCAL_EXCLUDE']    = ubt_sanitize($_POST['flash_local_exclude']    ?? '', 'path');
+        $cfg['FLASH_LOCAL_DRY_RUN']    = ubt_sanitize($_POST['flash_local_dry_run']    ?? 'no', 'bool');
+        $cfg['FLASH_LOCAL_DISCORD']    = ubt_sanitize($_POST['flash_local_discord']    ?? '');
+        $cfg['FLASH_REMOTE_HOST']      = ubt_sanitize($_POST['flash_remote_host']      ?? '', 'host');
+        $cfg['FLASH_REMOTE_USER']      = ubt_sanitize($_POST['flash_remote_user']      ?? '', 'user');
+        $cfg['FLASH_REMOTE_KEY']       = ubt_sanitize($_POST['flash_remote_key']       ?? '', 'path');
+        $cfg['FLASH_REMOTE_DEST']      = ubt_sanitize($_POST['flash_remote_dest']      ?? '', 'path');
+        $cfg['FLASH_REMOTE_BW_LIMIT']  = ubt_sanitize($_POST['flash_remote_bw_limit']  ?? '0', 'int');
+        $cfg['FLASH_REMOTE_RETENTION'] = ubt_sanitize($_POST['flash_remote_retention'] ?? '5', 'int');
+        $cfg['FLASH_REMOTE_DRY_RUN']   = ubt_sanitize($_POST['flash_remote_dry_run']   ?? 'no', 'bool');
+
+        if (ubt_write_cfg(UBT_FLASH_CFG, $cfg)) {
+            $page_message = 'Flash Backup settings saved.';
+        } else {
+            $page_error = 'Failed to write flash-backup.cfg. Check permissions on ' . UBT_FLASH_CFG;
+        }
+    }
+
+    // ── Save VM Config ───────────────────────────────────────
+    elseif ($action === 'save_vm') {
+        $cfg = ubt_parse_cfg(UBT_VM_CFG);
+        $cfg['VM_BACKUP_VMS']            = ubt_sanitize(implode(',', $_POST['vm_backup_vms'] ?? []), 'text');
+        $cfg['VM_BACKUP_DEST']           = ubt_sanitize($_POST['vm_backup_dest']           ?? '', 'path');
+        $cfg['VM_BACKUP_MODE']           = in_array($_POST['vm_backup_mode'] ?? '', ['stop', 'snapshot', 'live']) ? $_POST['vm_backup_mode'] : 'stop';
+        $cfg['VM_BACKUP_COMPRESS']       = ubt_sanitize($_POST['vm_backup_compress']       ?? 'no', 'bool');
+        $cfg['VM_BACKUP_RETENTION']      = ubt_sanitize($_POST['vm_backup_retention']      ?? '5', 'int');
+        $cfg['VM_BACKUP_INCLUDE_LIBVIRT']= ubt_sanitize($_POST['vm_backup_include_libvirt']?? 'yes', 'bool');
+        $cfg['VM_BACKUP_AUTOSTART']      = ubt_sanitize($_POST['vm_backup_autostart']      ?? 'no', 'bool');
+        $cfg['VM_BACKUP_DRY_RUN']        = ubt_sanitize($_POST['vm_backup_dry_run']        ?? 'no', 'bool');
+        $cfg['VM_RESTORE_FILE']          = ubt_sanitize($_POST['vm_restore_file']          ?? '', 'path');
+        $cfg['VM_RESTORE_TARGET']        = ubt_sanitize($_POST['vm_restore_target']        ?? '', 'text');
+        $cfg['VM_RESTORE_OVERWRITE']     = ubt_sanitize($_POST['vm_restore_overwrite']     ?? 'no', 'bool');
+        $cfg['VM_RESTORE_DISKS']         = ubt_sanitize($_POST['vm_restore_disks']         ?? 'yes', 'bool');
+        $cfg['VM_RESTORE_CONFIG']        = ubt_sanitize($_POST['vm_restore_config']        ?? 'yes', 'bool');
+        $cfg['VM_RESTORE_DRY_RUN']       = ubt_sanitize($_POST['vm_restore_dry_run']       ?? 'no', 'bool');
+
+        if (ubt_write_cfg(UBT_VM_CFG, $cfg)) {
+            $page_message = 'VM Backup & Restore settings saved.';
+        } else {
+            $page_error = 'Failed to write vm-backup.cfg. Check permissions on ' . UBT_VM_CFG;
+        }
+    }
+}
+
+// ── Load current configs ──────────────────────────────────────
+$flash_cfg  = ubt_parse_cfg(UBT_FLASH_CFG);
+$vm_cfg     = ubt_parse_cfg(UBT_VM_CFG);
+$which_cfg  = ubt_parse_cfg(UBT_WHICH_CFG);
+
+$selected   = $which_cfg['SELECTED_TOOL'] ?? 'flash-local';
+$running    = ubt_running_mode();
+$vms        = ubt_list_vms();
+
+// Flash defaults
+$f = array_merge([
+    'FLASH_LOCAL_DEST'        => '',
+    'FLASH_LOCAL_RETENTION'   => '5',
+    'FLASH_LOCAL_COMPRESS'    => 'yes',
+    'FLASH_LOCAL_INCLUDE'     => '',
+    'FLASH_LOCAL_EXCLUDE'     => '',
+    'FLASH_LOCAL_DRY_RUN'     => 'no',
+    'FLASH_LOCAL_DISCORD'     => '',
+    'FLASH_REMOTE_HOST'       => '',
+    'FLASH_REMOTE_USER'       => '',
+    'FLASH_REMOTE_KEY'        => '',
+    'FLASH_REMOTE_DEST'       => '',
+    'FLASH_REMOTE_BW_LIMIT'   => '0',
+    'FLASH_REMOTE_RETENTION'  => '5',
+    'FLASH_REMOTE_DRY_RUN'    => 'no',
+], $flash_cfg);
+
+// VM defaults
+$v = array_merge([
+    'VM_BACKUP_VMS'             => '',
+    'VM_BACKUP_DEST'            => '',
+    'VM_BACKUP_MODE'            => 'stop',
+    'VM_BACKUP_COMPRESS'        => 'yes',
+    'VM_BACKUP_RETENTION'       => '5',
+    'VM_BACKUP_INCLUDE_LIBVIRT' => 'yes',
+    'VM_BACKUP_AUTOSTART'       => 'no',
+    'VM_BACKUP_DRY_RUN'         => 'no',
+    'VM_RESTORE_FILE'           => '',
+    'VM_RESTORE_TARGET'         => '',
+    'VM_RESTORE_OVERWRITE'      => 'no',
+    'VM_RESTORE_DISKS'          => 'yes',
+    'VM_RESTORE_CONFIG'         => 'yes',
+    'VM_RESTORE_DRY_RUN'        => 'no',
+], $vm_cfg);
+
+$saved_vms = array_filter(explode(',', $v['VM_BACKUP_VMS']));
+
+// Helper: checked/selected
+function ubt_bool(string $val): bool { return $val === 'yes'; }
+function ubt_checked(bool $val): string { return $val ? ' checked' : ''; }
+function ubt_opt(string $val, string $cmp): string { return $val === $cmp ? ' selected' : ''; }
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Backup Tools</title>
+  <link rel="stylesheet" href="<?= UBT_ASSET_BASE ?>/css/styles.css">
+</head>
+<body>
+
+<!-- ================================================================
+     PAGE HEADER
+     ================================================================ -->
+<div class="ubt-header">
+  <div class="ubt-header-inner">
+    <div class="ubt-title-row">
+      <span class="ubt-logo">&#128190;</span>
+      <h1 class="ubt-title">Backup Tools</h1>
+      <?php if ($running): ?>
+      <span class="ubt-badge ubt-badge--running" id="ubt-running-badge">
+        Running: <?= htmlspecialchars($running) ?>
+      </span>
+      <?php else: ?>
+      <span class="ubt-badge ubt-badge--idle" id="ubt-running-badge">Idle</span>
+      <?php endif; ?>
+    </div>
+
+    <!-- Master tool selector -->
+    <div class="ubt-selector-row">
+      <label for="ubt-tool-select" class="ubt-selector-label">Backup Mode</label>
+      <div class="ubt-select-wrap">
+        <select id="ubt-tool-select" name="ubt_tool">
+          <option value="flash-local"  <?= $selected === 'flash-local'  ? 'selected' : '' ?>>&#9889; Flash Backup — Local</option>
+          <option value="flash-remote" <?= $selected === 'flash-remote' ? 'selected' : '' ?>>&#127760; Flash Backup — Remote</option>
+          <option value="vm-backup"    <?= $selected === 'vm-backup'    ? 'selected' : '' ?>>&#128190; VM Backup</option>
+          <option value="vm-restore"   <?= $selected === 'vm-restore'   ? 'selected' : '' ?>>&#9850; VM Restore</option>
+        </select>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Status messages ─────────────────────────────────────── -->
+<?php if ($page_message): ?>
+<div class="ubt-toast ubt-toast--ok" id="ubt-toast"><?= htmlspecialchars($page_message) ?></div>
+<?php elseif ($page_error): ?>
+<div class="ubt-toast ubt-toast--err" id="ubt-toast"><?= htmlspecialchars($page_error) ?></div>
+<?php endif; ?>
+
+<div class="ubt-main">
+
+  <!-- ============================================================
+       PANEL: Flash Backup — Local
+       ============================================================ -->
+  <section class="ubt-panel" id="panel-flash-local" data-panel="flash-local">
+    <div class="ubt-card">
+      <div class="ubt-card-header">
+        <span class="ubt-card-icon">&#9889;</span>
+        <h2>Flash Backup — Local</h2>
+        <span class="ubt-card-desc">Back up the Unraid flash drive to a local destination.</span>
+      </div>
+      <form id="form-flash-local" method="post" action="">
+        <input type="hidden" name="ubt_action" value="save_flash">
+
+        <div class="ubt-fields">
+
+          <!-- Destination -->
+          <div class="ubt-field">
+            <label for="flash_local_dest">Destination Path</label>
+            <input type="text" id="flash_local_dest" name="flash_local_dest"
+                   placeholder="/mnt/user/backups/flash"
+                   value="<?= htmlspecialchars($f['FLASH_LOCAL_DEST']) ?>">
+            <span class="ubt-hint">Full path to local backup directory.</span>
+          </div>
+
+          <!-- Retention -->
+          <div class="ubt-field ubt-field--short">
+            <label for="flash_local_retention">Retention Count</label>
+            <input type="number" id="flash_local_retention" name="flash_local_retention"
+                   min="1" max="99"
+                   value="<?= htmlspecialchars($f['FLASH_LOCAL_RETENTION']) ?>">
+            <span class="ubt-hint">Number of backups to keep.</span>
+          </div>
+
+          <!-- Compression -->
+          <div class="ubt-field ubt-field--toggle">
+            <label>Compression</label>
+            <label class="ubt-switch">
+              <input type="checkbox" name="flash_local_compress" value="yes"
+                     <?= ubt_checked(ubt_bool($f['FLASH_LOCAL_COMPRESS'])) ?>>
+              <span class="ubt-slider"></span>
+            </label>
+            <span class="ubt-hint">Compress backup archive (tar.gz).</span>
+          </div>
+
+          <!-- Include Paths -->
+          <div class="ubt-field">
+            <label for="flash_local_include">Include Paths</label>
+            <input type="text" id="flash_local_include" name="flash_local_include"
+                   placeholder="/boot/extra,/boot/config"
+                   value="<?= htmlspecialchars($f['FLASH_LOCAL_INCLUDE']) ?>">
+            <span class="ubt-hint">Comma-separated paths to explicitly include.</span>
+          </div>
+
+          <!-- Exclude Paths -->
+          <div class="ubt-field">
+            <label for="flash_local_exclude">Exclude Paths</label>
+            <input type="text" id="flash_local_exclude" name="flash_local_exclude"
+                   placeholder="/boot/logs,/boot/tmp"
+                   value="<?= htmlspecialchars($f['FLASH_LOCAL_EXCLUDE']) ?>">
+            <span class="ubt-hint">Comma-separated paths to exclude from backup.</span>
+          </div>
+
+          <!-- Discord Webhook -->
+          <div class="ubt-field">
+            <label for="flash_local_discord">Discord Webhook URL</label>
+            <input type="text" id="flash_local_discord" name="flash_local_discord"
+                   placeholder="https://discord.com/api/webhooks/..."
+                   value="<?= htmlspecialchars($f['FLASH_LOCAL_DISCORD']) ?>">
+            <span class="ubt-hint">Optional — post status notification on completion.</span>
+          </div>
+
+          <!-- Dry Run -->
+          <div class="ubt-field ubt-field--toggle">
+            <label>Dry Run</label>
+            <label class="ubt-switch">
+              <input type="checkbox" name="flash_local_dry_run" value="yes"
+                     <?= ubt_checked(ubt_bool($f['FLASH_LOCAL_DRY_RUN'])) ?>>
+              <span class="ubt-slider"></span>
+            </label>
+            <span class="ubt-hint">Simulate backup without writing any files.</span>
+          </div>
+
+        </div><!-- /.ubt-fields -->
+
+        <div class="ubt-actions">
+          <button type="submit" class="ubt-btn ubt-btn--save">Save Settings</button>
+          <button type="button" class="ubt-btn ubt-btn--run" id="run-flash-local"
+                  data-mode="flash-local" <?= $running ? 'disabled' : '' ?>>
+            Run Now
+          </button>
+          <button type="button" class="ubt-btn ubt-btn--stop" id="stop-btn"
+                  <?= !$running ? 'disabled' : '' ?>>
+            Stop
+          </button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       PANEL: Flash Backup — Remote
+       ============================================================ -->
+  <section class="ubt-panel" id="panel-flash-remote" data-panel="flash-remote">
+    <div class="ubt-card">
+      <div class="ubt-card-header">
+        <span class="ubt-card-icon">&#127760;</span>
+        <h2>Flash Backup — Remote</h2>
+        <span class="ubt-card-desc">Sync the Unraid flash drive to a remote host over SSH/rsync.</span>
+      </div>
+      <form id="form-flash-remote" method="post" action="">
+        <input type="hidden" name="ubt_action" value="save_flash">
+
+        <div class="ubt-fields">
+
+          <!-- Remote Host -->
+          <div class="ubt-field ubt-field--half">
+            <label for="flash_remote_host">Remote Host</label>
+            <input type="text" id="flash_remote_host" name="flash_remote_host"
+                   placeholder="192.168.1.100"
+                   value="<?= htmlspecialchars($f['FLASH_REMOTE_HOST']) ?>">
+          </div>
+
+          <!-- Remote User -->
+          <div class="ubt-field ubt-field--half">
+            <label for="flash_remote_user">Remote User</label>
+            <input type="text" id="flash_remote_user" name="flash_remote_user"
+                   placeholder="root"
+                   value="<?= htmlspecialchars($f['FLASH_REMOTE_USER']) ?>">
+          </div>
+
+          <!-- SSH Key Path -->
+          <div class="ubt-field">
+            <label for="flash_remote_key">SSH Key Path</label>
+            <input type="text" id="flash_remote_key" name="flash_remote_key"
+                   placeholder="/root/.ssh/id_rsa"
+                   value="<?= htmlspecialchars($f['FLASH_REMOTE_KEY']) ?>">
+            <span class="ubt-hint">Path to private key used for authentication.</span>
+          </div>
+
+          <!-- Remote Destination -->
+          <div class="ubt-field">
+            <label for="flash_remote_dest">Remote Destination Path</label>
+            <input type="text" id="flash_remote_dest" name="flash_remote_dest"
+                   placeholder="/mnt/backups/flash"
+                   value="<?= htmlspecialchars($f['FLASH_REMOTE_DEST']) ?>">
+          </div>
+
+          <!-- Bandwidth Limit -->
+          <div class="ubt-field ubt-field--short">
+            <label for="flash_remote_bw_limit">Bandwidth Limit (KB/s)</label>
+            <input type="number" id="flash_remote_bw_limit" name="flash_remote_bw_limit"
+                   min="0" placeholder="0 = unlimited"
+                   value="<?= htmlspecialchars($f['FLASH_REMOTE_BW_LIMIT']) ?>">
+            <span class="ubt-hint">0 = no limit.</span>
+          </div>
+
+          <!-- Retention -->
+          <div class="ubt-field ubt-field--short">
+            <label for="flash_remote_retention">Retention Count</label>
+            <input type="number" id="flash_remote_retention" name="flash_remote_retention"
+                   min="1" max="99"
+                   value="<?= htmlspecialchars($f['FLASH_REMOTE_RETENTION']) ?>">
+          </div>
+
+          <!-- Dry Run -->
+          <div class="ubt-field ubt-field--toggle">
+            <label>Dry Run</label>
+            <label class="ubt-switch">
+              <input type="checkbox" name="flash_remote_dry_run" value="yes"
+                     <?= ubt_checked(ubt_bool($f['FLASH_REMOTE_DRY_RUN'])) ?>>
+              <span class="ubt-slider"></span>
+            </label>
+            <span class="ubt-hint">Simulate transfer without writing any files.</span>
+          </div>
+
+        </div><!-- /.ubt-fields -->
+
+        <div class="ubt-actions">
+          <button type="submit" class="ubt-btn ubt-btn--save">Save Settings</button>
+          <button type="button" class="ubt-btn ubt-btn--test" id="test-ssh-btn">
+            Test Connection
+          </button>
+          <button type="button" class="ubt-btn ubt-btn--run" id="run-flash-remote"
+                  data-mode="flash-remote" <?= $running ? 'disabled' : '' ?>>
+            Run Now
+          </button>
+          <button type="button" class="ubt-btn ubt-btn--stop"
+                  <?= !$running ? 'disabled' : '' ?>>Stop</button>
+        </div>
+        <div class="ubt-test-result" id="ssh-test-result"></div>
+      </form>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       PANEL: VM Backup
+       ============================================================ -->
+  <section class="ubt-panel" id="panel-vm-backup" data-panel="vm-backup">
+    <div class="ubt-card">
+      <div class="ubt-card-header">
+        <span class="ubt-card-icon">&#128190;</span>
+        <h2>VM Backup</h2>
+        <span class="ubt-card-desc">Back up one or more virtual machines.</span>
+      </div>
+      <form id="form-vm-backup" method="post" action="">
+        <input type="hidden" name="ubt_action" value="save_vm">
+
+        <div class="ubt-fields">
+
+          <!-- VM Multi-select -->
+          <div class="ubt-field ubt-field--full">
+            <label>Virtual Machines</label>
+            <div class="ubt-vm-list" id="vm-list">
+              <?php if (empty($vms)): ?>
+              <p class="ubt-hint">No VMs detected. Ensure libvirt/KVM is active.</p>
+              <?php else: ?>
+              <?php foreach ($vms as $vm): ?>
+              <label class="ubt-vm-item">
+                <input type="checkbox" name="vm_backup_vms[]"
+                       value="<?= htmlspecialchars($vm) ?>"
+                       <?= in_array($vm, $saved_vms) ? 'checked' : '' ?>>
+                <span><?= htmlspecialchars($vm) ?></span>
+              </label>
+              <?php endforeach; ?>
+              <?php endif; ?>
+            </div>
+          </div>
+
+          <!-- Destination -->
+          <div class="ubt-field">
+            <label for="vm_backup_dest">Destination Path</label>
+            <input type="text" id="vm_backup_dest" name="vm_backup_dest"
+                   placeholder="/mnt/user/backups/vms"
+                   value="<?= htmlspecialchars($v['VM_BACKUP_DEST']) ?>">
+          </div>
+
+          <!-- Backup Mode -->
+          <div class="ubt-field ubt-field--short">
+            <label for="vm_backup_mode">Backup Mode</label>
+            <select id="vm_backup_mode" name="vm_backup_mode">
+              <option value="stop"     <?= ubt_opt($v['VM_BACKUP_MODE'], 'stop') ?>>Shutdown VM</option>
+              <option value="snapshot" <?= ubt_opt($v['VM_BACKUP_MODE'], 'snapshot') ?>>Snapshot</option>
+              <option value="live"     <?= ubt_opt($v['VM_BACKUP_MODE'], 'live') ?>>Live (risky)</option>
+            </select>
+            <span class="ubt-hint">How the VM disk is captured.</span>
+          </div>
+
+          <!-- Compression -->
+          <div class="ubt-field ubt-field--toggle">
+            <label>Compression</label>
+            <label class="ubt-switch">
+              <input type="checkbox" name="vm_backup_compress" value="yes"
+                     <?= ubt_checked(ubt_bool($v['VM_BACKUP_COMPRESS'])) ?>>
+              <span class="ubt-slider"></span>
+            </label>
+          </div>
+
+          <!-- Retention -->
+          <div class="ubt-field ubt-field--short">
+            <label for="vm_backup_retention">Retention Count</label>
+            <input type="number" id="vm_backup_retention" name="vm_backup_retention"
+                   min="1" max="99"
+                   value="<?= htmlspecialchars($v['VM_BACKUP_RETENTION']) ?>">
+          </div>
+
+          <!-- Include libvirt config -->
+          <div class="ubt-field ubt-field--toggle">
+            <label>Include libvirt XML</label>
+            <label class="ubt-switch">
+              <input type="checkbox" name="vm_backup_include_libvirt" value="yes"
+                     <?= ubt_checked(ubt_bool($v['VM_BACKUP_INCLUDE_LIBVIRT'])) ?>>
+              <span class="ubt-slider"></span>
+            </label>
+            <span class="ubt-hint">Also export the VM XML definition.</span>
+          </div>
+
+          <!-- Auto-start after backup -->
+          <div class="ubt-field ubt-field--toggle">
+            <label>Auto-start After Backup</label>
+            <label class="ubt-switch">
+              <input type="checkbox" name="vm_backup_autostart" value="yes"
+                     <?= ubt_checked(ubt_bool($v['VM_BACKUP_AUTOSTART'])) ?>>
+              <span class="ubt-slider"></span>
+            </label>
+            <span class="ubt-hint">Restart VM once backup completes (only for stop mode).</span>
+          </div>
+
+          <!-- Dry Run -->
+          <div class="ubt-field ubt-field--toggle">
+            <label>Dry Run</label>
+            <label class="ubt-switch">
+              <input type="checkbox" name="vm_backup_dry_run" value="yes"
+                     <?= ubt_checked(ubt_bool($v['VM_BACKUP_DRY_RUN'])) ?>>
+              <span class="ubt-slider"></span>
+            </label>
+          </div>
+
+        </div><!-- /.ubt-fields -->
+
+        <div class="ubt-actions">
+          <button type="submit" class="ubt-btn ubt-btn--save">Save Settings</button>
+          <button type="button" class="ubt-btn ubt-btn--run" id="run-vm-backup"
+                  data-mode="vm-backup" <?= $running ? 'disabled' : '' ?>>
+            Run Now
+          </button>
+          <button type="button" class="ubt-btn ubt-btn--stop"
+                  <?= !$running ? 'disabled' : '' ?>>Stop</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       PANEL: VM Restore
+       ============================================================ -->
+  <section class="ubt-panel" id="panel-vm-restore" data-panel="vm-restore">
+    <div class="ubt-card">
+      <div class="ubt-card-header">
+        <span class="ubt-card-icon">&#9850;</span>
+        <h2>VM Restore</h2>
+        <span class="ubt-card-desc">Restore a virtual machine from a backup archive.</span>
+      </div>
+      <form id="form-vm-restore" method="post" action="">
+        <input type="hidden" name="ubt_action" value="save_vm">
+
+        <div class="ubt-fields">
+
+          <!-- Backup file -->
+          <div class="ubt-field">
+            <label for="vm_restore_file">Backup Archive Path</label>
+            <input type="text" id="vm_restore_file" name="vm_restore_file"
+                   placeholder="/mnt/user/backups/vms/myvm_2025-01-01.tar.gz"
+                   value="<?= htmlspecialchars($v['VM_RESTORE_FILE']) ?>">
+            <span class="ubt-hint">Full path to the .tar.gz backup created by VM Backup.</span>
+          </div>
+
+          <!-- Target VM name -->
+          <div class="ubt-field ubt-field--half">
+            <label for="vm_restore_target">Target VM Name</label>
+            <input type="text" id="vm_restore_target" name="vm_restore_target"
+                   placeholder="myvm"
+                   value="<?= htmlspecialchars($v['VM_RESTORE_TARGET']) ?>">
+            <span class="ubt-hint">Leave blank to use name from archive.</span>
+          </div>
+
+          <!-- Overwrite -->
+          <div class="ubt-field ubt-field--toggle">
+            <label>Overwrite Existing VM</label>
+            <label class="ubt-switch">
+              <input type="checkbox" name="vm_restore_overwrite" value="yes"
+                     id="restore-overwrite"
+                     <?= ubt_checked(ubt_bool($v['VM_RESTORE_OVERWRITE'])) ?>>
+              <span class="ubt-slider"></span>
+            </label>
+            <span class="ubt-hint ubt-hint--warn">Destructive — existing VM data will be removed.</span>
+          </div>
+
+          <!-- Restore disks -->
+          <div class="ubt-field ubt-field--toggle">
+            <label>Restore Disk Images</label>
+            <label class="ubt-switch">
+              <input type="checkbox" name="vm_restore_disks" value="yes"
+                     <?= ubt_checked(ubt_bool($v['VM_RESTORE_DISKS'])) ?>>
+              <span class="ubt-slider"></span>
+            </label>
+          </div>
+
+          <!-- Restore config -->
+          <div class="ubt-field ubt-field--toggle">
+            <label>Restore libvirt XML Config</label>
+            <label class="ubt-switch">
+              <input type="checkbox" name="vm_restore_config" value="yes"
+                     <?= ubt_checked(ubt_bool($v['VM_RESTORE_CONFIG'])) ?>>
+              <span class="ubt-slider"></span>
+            </label>
+          </div>
+
+          <!-- Dry Run -->
+          <div class="ubt-field ubt-field--toggle">
+            <label>Dry Run</label>
+            <label class="ubt-switch">
+              <input type="checkbox" name="vm_restore_dry_run" value="yes"
+                     <?= ubt_checked(ubt_bool($v['VM_RESTORE_DRY_RUN'])) ?>>
+              <span class="ubt-slider"></span>
+            </label>
+          </div>
+
+        </div><!-- /.ubt-fields -->
+
+        <div class="ubt-actions">
+          <button type="submit" class="ubt-btn ubt-btn--save">Save Settings</button>
+          <button type="button" class="ubt-btn ubt-btn--run ubt-btn--danger"
+                  id="run-vm-restore" data-mode="vm-restore"
+                  <?= $running ? 'disabled' : '' ?>>
+            Restore Now
+          </button>
+          <button type="button" class="ubt-btn ubt-btn--stop"
+                  <?= !$running ? 'disabled' : '' ?>>Stop</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       LOG VIEWER
+       ============================================================ -->
+  <div class="ubt-card ubt-log-card" id="ubt-log-card">
+    <div class="ubt-log-header">
+      <h3>&#128196; Log Output</h3>
+      <div class="ubt-log-controls">
+        <select id="ubt-log-file-select">
+          <option value="live">— Live stream —</option>
+        </select>
+        <button type="button" class="ubt-btn ubt-btn--sm" id="ubt-log-refresh">Refresh</button>
+        <button type="button" class="ubt-btn ubt-btn--sm" id="ubt-log-clear">Clear View</button>
+      </div>
+    </div>
+    <pre class="ubt-log-area" id="ubt-log-area">Idle — run a backup to see output here.</pre>
+  </div>
+
+</div><!-- /.ubt-main -->
+
+<!-- ============================================================
+     CONFIRMATION MODAL (VM Restore)
+     ============================================================ -->
+<div class="ubt-modal-overlay" id="ubt-confirm-modal" aria-hidden="true">
+  <div class="ubt-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <h2 id="modal-title">&#9888; Confirm VM Restore</h2>
+    <p class="ubt-modal-body" id="modal-body">
+      This will overwrite the existing VM. All current disk data will be lost.
+      Are you sure you want to continue?
+    </p>
+    <div class="ubt-modal-actions">
+      <button class="ubt-btn ubt-btn--danger" id="modal-confirm">Yes, Restore</button>
+      <button class="ubt-btn ubt-btn--save"   id="modal-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script src="<?= UBT_ASSET_BASE ?>/js/app.js"></script>
+</body>
+</html>
