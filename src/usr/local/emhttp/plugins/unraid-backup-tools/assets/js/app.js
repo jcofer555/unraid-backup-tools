@@ -1,167 +1,119 @@
 /**
  * unraid-backup-tools — Frontend Application
  * Author:  Jon C
- * Arch:    Explicit state machine, vanilla JS, no jQuery, no hidden side effects
  *
- * State machine:
- *   IDLE      → RUN_REQUESTED → RUNNING → IDLE
- *   RUNNING   → STOP_REQUESTED → STOPPING → IDLE
+ * All AJAX calls go through:
+ *   /plugins/unraid-backup-tools/include/ajax.php?action=<action>
  *
- * All DOM mutations are driven by state transitions.
- * No implicit DOM state — everything reads from UBT.state.
+ * State machine: IDLE → RUNNING → STOPPING → IDLE
  */
 
 'use strict';
 
 const UBT = (() => {
 
-  // ── State ────────────────────────────────────────────────────────────────
+  // ── Base AJAX endpoint ────────────────────────────────────────────────────
+  const AJAX = '/plugins/unraid-backup-tools/include/ajax.php';
+
+  // ── State ─────────────────────────────────────────────────────────────────
   const state = {
-    currentTool: 'flash-local',
-    runState: 'IDLE',    // IDLE | RUNNING | STOPPING
-    logInterval: null,
+    currentTool:   'flash-local',
+    runState:      'IDLE',       // IDLE | RUNNING | STOPPING
+    logInterval:   null,
     logScrollLock: true,
-    pendingRestoreMode: false,
-    lastLogLine: 0,
+    lastLogOffset: 0,
   };
 
-  // ── API endpoints (relative — same origin) ────────────────────────────────
-  const API = {
-    run:        '/plugins/unraid-backup-tools/api/run.php',
-    stop:       '/plugins/unraid-backup-tools/api/stop.php',
-    status:     '/plugins/unraid-backup-tools/api/status.php',
-    log:        '/plugins/unraid-backup-tools/api/log.php',
-    sshTest:    '/plugins/unraid-backup-tools/api/ssh-test.php',
-    logList:    '/plugins/unraid-backup-tools/api/log-list.php',
-    savePlugin: '/plugins/unraid-backup-tools/api/save-plugin.php',
-  };
-
-  // ── DOM refs (lazily cached) ──────────────────────────────────────────────
-  const el = {
-    toolSelect:     () => document.getElementById('ubt-tool-select'),
-    panels:         () => document.querySelectorAll('.ubt-panel'),
-    runningBadge:   () => document.getElementById('ubt-running-badge'),
-    logArea:        () => document.getElementById('ubt-log-area'),
-    logFileSelect:  () => document.getElementById('ubt-log-file-select'),
-    logRefresh:     () => document.getElementById('ubt-log-refresh'),
-    logClear:       () => document.getElementById('ubt-log-clear'),
-    confirmModal:   () => document.getElementById('ubt-confirm-modal'),
-    modalConfirm:   () => document.getElementById('modal-confirm'),
-    modalCancel:    () => document.getElementById('modal-cancel'),
-    modalBody:      () => document.getElementById('modal-body'),
-    sshTestResult:  () => document.getElementById('ssh-test-result'),
-    stopBtns:       () => document.querySelectorAll('.ubt-btn--stop'),
-    runBtns:        () => document.querySelectorAll('.ubt-btn--run'),
-    toast:          () => document.getElementById('ubt-toast'),
-  };
-
-  // ── Tool → panel map ──────────────────────────────────────────────────────
-  const TOOL_PANELS = {
+  // ── Tool → panel id map ───────────────────────────────────────────────────
+  const PANELS = {
     'flash-local':  'panel-flash-local',
     'flash-remote': 'panel-flash-remote',
     'vm-backup':    'panel-vm-backup',
     'vm-restore':   'panel-vm-restore',
   };
 
-  // ── State machine transition ──────────────────────────────────────────────
-  function setRunState(newState) {
-    state.runState = newState;
-    applyRunStateToDom();
+  // ── Tiny fetch helpers ────────────────────────────────────────────────────
+  function get(action, params) {
+    params = params || {};
+    const qs = new URLSearchParams(Object.assign({ action: action }, params));
+    return fetch(AJAX + '?' + qs).then(function(r) { return r.json(); });
   }
 
-  function applyRunStateToDom() {
-    const isRunning = state.runState !== 'IDLE';
-    const isStopping = state.runState === 'STOPPING';
+  function post(action, body) {
+    body = body || {};
+    const qs   = new URLSearchParams({ action: action });
+    const form = new URLSearchParams(body);
+    return fetch(AJAX + '?' + qs, { method: 'POST', body: form })
+      .then(function(r) { return r.json(); });
+  }
 
-    el.runBtns().forEach(btn => {
-      btn.disabled = isRunning;
+  // ── DOM helpers ───────────────────────────────────────────────────────────
+  function byId(id) { return document.getElementById(id); }
+  function all(sel) { return document.querySelectorAll(sel); }
+
+  // ── State machine ─────────────────────────────────────────────────────────
+  function setRunState(next) {
+    state.runState = next;
+    var isRunning  = next !== 'IDLE';
+    var isStopping = next === 'STOPPING';
+
+    all('[data-mode]').forEach(function(btn) { btn.disabled = isRunning; });
+    all('.ubt-btn--stop').forEach(function(btn) {
+      btn.disabled    = !isRunning || isStopping;
+      btn.textContent = isStopping ? 'Stopping\u2026' : 'Stop';
     });
 
-    el.stopBtns().forEach(btn => {
-      btn.disabled = !isRunning || isStopping;
-      btn.textContent = isStopping ? 'Stopping…' : 'Stop';
-    });
-
-    const badge = el.runningBadge();
+    var badge = byId('ubt-running-badge');
     if (!badge) return;
     if (isRunning) {
-      badge.className = 'ubt-badge ubt-badge--running';
-      badge.textContent = 'Running: ' + (state.currentTool || '');
+      badge.className   = 'ubt-badge ubt-badge--running';
+      badge.textContent = 'Running: ' + state.currentTool;
     } else {
-      badge.className = 'ubt-badge ubt-badge--idle';
+      badge.className   = 'ubt-badge ubt-badge--idle';
       badge.textContent = 'Idle';
     }
   }
 
   // ── Panel switching ───────────────────────────────────────────────────────
   function switchPanel(tool) {
-    if (!TOOL_PANELS[tool]) {
-      console.error('UBT: unknown tool', tool);
-      return;
-    }
+    if (!PANELS[tool]) return;
     state.currentTool = tool;
 
-    el.panels().forEach(panel => {
-      panel.classList.remove('ubt-panel--active');
-    });
+    all('.ubt-panel').forEach(function(p) { p.classList.remove('ubt-panel--active'); });
+    var target = document.getElementById(PANELS[tool]);
+    if (target) target.classList.add('ubt-panel--active');
 
-    const targetId = TOOL_PANELS[tool];
-    const targetPanel = document.getElementById(targetId);
-    if (targetPanel) {
-      targetPanel.classList.add('ubt-panel--active');
-    }
-
-    persistToolSelection(tool);
+    post('save_tool', { tool: tool }).catch(function() {});
     loadLogList(tool);
-  }
-
-  // ── Persist selected tool via AJAX (writes which-plugin.cfg) ─────────────
-  function persistToolSelection(tool) {
-    const body = new URLSearchParams({ tool });
-    fetch(API.savePlugin, { method: 'POST', body })
-      .then(r => r.json())
-      .catch(() => {}); // Non-critical — silently ignore
   }
 
   // ── Run backup ────────────────────────────────────────────────────────────
   function triggerRun(mode) {
-    if (state.runState !== 'IDLE') {
-      showToast('A backup is already running.', 'err');
-      return;
-    }
+    if (state.runState !== 'IDLE') { showToast('A backup is already running.', 'err'); return; }
 
-    // VM Restore with overwrite checked → show confirmation modal
     if (mode === 'vm-restore') {
-      const overwrite = document.querySelector('input[name="vm_restore_overwrite"]');
-      if (overwrite && overwrite.checked) {
-        showRestoreModal(() => executeRun(mode));
-        return;
-      }
+      var ow = document.querySelector('input[name="vm_restore_overwrite"]');
+      if (ow && ow.checked) { showRestoreModal(function() { executeRun(mode); }); return; }
     }
-
     executeRun(mode);
   }
 
   function executeRun(mode) {
     setRunState('RUNNING');
-    state.lastLogLine = 0;
+    state.lastLogOffset = 0;
     clearLog();
-    appendLog('Starting: ' + mode + ' …', 'info');
+    appendLog('Starting: ' + mode + ' \u2026', 'info');
     startLogStream();
 
-    const body = new URLSearchParams({ mode });
-    fetch(API.run, { method: 'POST', body })
-      .then(r => r.json())
-      .then(data => {
+    post('run', { mode: mode })
+      .then(function(data) {
         if (data.error) {
           appendLog('ERROR: ' + data.error, 'error');
           setRunState('IDLE');
           stopLogStream();
         }
-        // Otherwise the run.php launches backup.sh async;
-        // status polling and log streaming handle the rest
       })
-      .catch(err => {
+      .catch(function(err) {
         appendLog('Request failed: ' + err.message, 'error');
         setRunState('IDLE');
         stopLogStream();
@@ -172,37 +124,25 @@ const UBT = (() => {
   function triggerStop() {
     if (state.runState !== 'RUNNING') return;
     setRunState('STOPPING');
-    appendLog('Sending stop signal…', 'warn');
-
-    fetch(API.stop, { method: 'POST' })
-      .then(r => r.json())
-      .then(() => {
-        // Status poll will detect IDLE after the process exits
-      })
-      .catch(err => {
-        appendLog('Stop request failed: ' + err.message, 'error');
-      });
+    appendLog('Sending stop signal\u2026', 'warn');
+    post('stop').catch(function(err) { appendLog('Stop failed: ' + err.message, 'error'); });
   }
 
-  // ── Status polling (detects run completion) ───────────────────────────────
+  // ── Status polling ────────────────────────────────────────────────────────
   function startStatusPoll() {
-    const poller = setInterval(() => {
-      if (state.runState === 'IDLE') {
-        clearInterval(poller);
-        return;
-      }
-      fetch(API.status)
-        .then(r => r.json())
-        .then(data => {
+    var timer = setInterval(function() {
+      if (state.runState === 'IDLE') { clearInterval(timer); return; }
+      get('status')
+        .then(function(data) {
           if (!data.running) {
             appendLog('Backup process ended.', 'ok');
             setRunState('IDLE');
             stopLogStream();
-            clearInterval(poller);
+            clearInterval(timer);
             loadLogList(state.currentTool);
           }
         })
-        .catch(() => {});
+        .catch(function() {});
     }, 2000);
   }
 
@@ -213,259 +153,203 @@ const UBT = (() => {
   }
 
   function stopLogStream() {
-    if (state.logInterval) {
-      clearInterval(state.logInterval);
-      state.logInterval = null;
-    }
-    // Final fetch to catch last lines
+    if (state.logInterval) { clearInterval(state.logInterval); state.logInterval = null; }
     fetchLiveLog();
   }
 
   function fetchLiveLog() {
-    const params = new URLSearchParams({ offset: state.lastLogLine });
-    fetch(API.log + '?' + params)
-      .then(r => r.json())
-      .then(data => {
-        if (!data.lines || data.lines.length === 0) return;
-        data.lines.forEach(line => appendLog(line, classifyLogLine(line)));
-        state.lastLogLine = data.next_offset || state.lastLogLine;
+    get('log', { file: 'live', offset: state.lastLogOffset })
+      .then(function(data) {
+        if (!data.lines || !data.lines.length) return;
+        data.lines.forEach(function(line) { appendLog(line, classifyLine(line)); });
+        state.lastLogOffset = data.next_offset || state.lastLogOffset;
       })
-      .catch(() => {});
+      .catch(function() {});
   }
 
-  function fetchArchivedLog(filepath) {
+  function fetchArchivedLog(path) {
     clearLog();
-    const params = new URLSearchParams({ file: filepath, offset: 0 });
-    fetch(API.log + '?' + params)
-      .then(r => r.json())
-      .then(data => {
-        if (data.lines) {
-          data.lines.forEach(line => appendLog(line, classifyLogLine(line)));
-        }
+    get('log', { file: path, offset: 0 })
+      .then(function(data) {
+        if (data.lines) data.lines.forEach(function(l) { appendLog(l, classifyLine(l)); });
       })
-      .catch(() => {});
+      .catch(function() {});
   }
 
-  function classifyLogLine(line) {
-    const l = line.toLowerCase();
-    if (l.includes('[error]') || l.includes('error:'))   return 'error';
-    if (l.includes('[warn]')  || l.includes('warning:')) return 'warn';
-    if (l.includes('success') || l.includes('complete')) return 'ok';
-    if (l.includes('[dry]'))                              return 'dry';
+  function classifyLine(line) {
+    var l = line.toLowerCase();
+    if (l.indexOf('[error]') !== -1 || l.indexOf('error:') !== -1)   return 'error';
+    if (l.indexOf('[warn]')  !== -1 || l.indexOf('warning:') !== -1) return 'warn';
+    if (l.indexOf('success') !== -1 || l.indexOf('complete') !== -1) return 'ok';
+    if (l.indexOf('[dry]')   !== -1)                                  return 'dry';
     return 'info';
   }
 
   function appendLog(text, type) {
-    const area = el.logArea();
+    var area = byId('ubt-log-area');
     if (!area) return;
-    const span = document.createElement('span');
+    var span = document.createElement('span');
     if (type && type !== 'info') span.className = 'log--' + type;
     span.textContent = text + '\n';
     area.appendChild(span);
-    if (state.logScrollLock) {
-      area.scrollTop = area.scrollHeight;
-    }
+    if (state.logScrollLock) area.scrollTop = area.scrollHeight;
   }
 
   function clearLog() {
-    const area = el.logArea();
+    var area = byId('ubt-log-area');
     if (area) area.textContent = '';
   }
 
-  // ── Load log file list ────────────────────────────────────────────────────
+  // ── Log file list ─────────────────────────────────────────────────────────
   function loadLogList(tool) {
-    const sel = el.logFileSelect();
+    var sel = byId('ubt-log-file-select');
     if (!sel) return;
-
-    const params = new URLSearchParams({ tool });
-    fetch(API.logList + '?' + params)
-      .then(r => r.json())
-      .then(data => {
-        // Clear existing options beyond the "live" placeholder
+    get('log_list', { tool: tool })
+      .then(function(data) {
         while (sel.options.length > 1) sel.remove(1);
-        if (data.files && data.files.length > 0) {
-          data.files.forEach(f => {
-            const opt = document.createElement('option');
-            opt.value = f.path;
-            opt.textContent = f.label;
-            sel.appendChild(opt);
-          });
-        }
+        (data.files || []).forEach(function(f) {
+          var opt = document.createElement('option');
+          opt.value = f.path;
+          opt.textContent = f.label;
+          sel.appendChild(opt);
+        });
       })
-      .catch(() => {});
+      .catch(function() {});
   }
 
-  // ── SSH connection test ───────────────────────────────────────────────────
+  // ── SSH test ──────────────────────────────────────────────────────────────
   function triggerSSHTest() {
-    const host   = document.getElementById('flash_remote_host')?.value?.trim()   || '';
-    const user   = document.getElementById('flash_remote_user')?.value?.trim()   || 'root';
-    const key    = document.getElementById('flash_remote_key')?.value?.trim()    || '';
-    const result = el.sshTestResult();
+    var hostEl   = document.getElementById('flash_remote_host');
+    var userEl   = document.getElementById('flash_remote_user');
+    var keyEl    = document.getElementById('flash_remote_key');
+    var result   = byId('ssh-test-result');
+
+    var host = hostEl ? hostEl.value.trim() : '';
+    var user = userEl ? userEl.value.trim() : 'root';
+    var key  = keyEl  ? keyEl.value.trim()  : '';
 
     if (!host) {
       if (result) { result.className = 'ubt-test-result ubt-test-result--err'; result.textContent = 'Remote host is required.'; }
       return;
     }
+    if (result) { result.className = 'ubt-test-result'; result.textContent = 'Testing\u2026'; }
 
-    if (result) { result.className = 'ubt-test-result'; result.textContent = 'Testing…'; }
-
-    const body = new URLSearchParams({ host, user, key });
-    fetch(API.sshTest, { method: 'POST', body })
-      .then(r => r.json())
-      .then(data => {
+    post('ssh_test', { host: host, user: user, key: key })
+      .then(function(data) {
         if (!result) return;
         if (data.ok) {
-          result.className = 'ubt-test-result ubt-test-result--ok';
-          result.textContent = '✓ Connection successful to ' + user + '@' + host;
+          result.className   = 'ubt-test-result ubt-test-result--ok';
+          result.textContent = '\u2713 Connected to ' + user + '@' + host;
         } else {
-          result.className = 'ubt-test-result ubt-test-result--err';
-          result.textContent = '✗ ' + (data.error || 'Connection failed');
+          result.className   = 'ubt-test-result ubt-test-result--err';
+          result.textContent = '\u2717 ' + (data.error || 'Connection failed');
         }
       })
-      .catch(err => {
-        if (result) {
-          result.className = 'ubt-test-result ubt-test-result--err';
-          result.textContent = 'Request error: ' + err.message;
-        }
+      .catch(function(err) {
+        if (result) { result.className = 'ubt-test-result ubt-test-result--err'; result.textContent = 'Request error: ' + err.message; }
       });
   }
 
-  // ── Restore modal ─────────────────────────────────────────────────────────
+  // ── Restore confirm modal ─────────────────────────────────────────────────
   function showRestoreModal(onConfirm) {
-    const overlay = el.confirmModal();
+    var overlay    = byId('ubt-confirm-modal');
     if (!overlay) { onConfirm(); return; }
-
     overlay.classList.add('ubt-modal-overlay--visible');
     overlay.setAttribute('aria-hidden', 'false');
 
-    const confirmBtn = el.modalConfirm();
-    const cancelBtn  = el.modalCancel();
+    var confirmBtn = byId('modal-confirm');
+    var cancelBtn  = byId('modal-cancel');
 
     function cleanup() {
       overlay.classList.remove('ubt-modal-overlay--visible');
       overlay.setAttribute('aria-hidden', 'true');
-      confirmBtn?.removeEventListener('click', handleConfirm);
-      cancelBtn?.removeEventListener('click', handleCancel);
+      if (confirmBtn) confirmBtn.removeEventListener('click', handleConfirm);
+      if (cancelBtn)  cancelBtn.removeEventListener('click', handleCancel);
     }
-
     function handleConfirm() { cleanup(); onConfirm(); }
     function handleCancel()  { cleanup(); }
 
-    confirmBtn?.addEventListener('click', handleConfirm);
-    cancelBtn?.addEventListener('click', handleCancel);
-
-    // Close on overlay click (outside modal)
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) handleCancel();
-    }, { once: true });
+    if (confirmBtn) confirmBtn.addEventListener('click', handleConfirm);
+    if (cancelBtn)  cancelBtn.addEventListener('click', handleCancel);
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) handleCancel(); }, { once: true });
   }
 
   // ── Toast ─────────────────────────────────────────────────────────────────
   function showToast(msg, type) {
-    const existing = el.toast();
-    const toast = existing || document.createElement('div');
-    toast.id = 'ubt-toast';
-    toast.className = 'ubt-toast ubt-toast--' + (type === 'err' ? 'err' : 'ok');
-    toast.textContent = msg;
-    if (!existing) {
-      document.querySelector('.ubt-main')?.prepend(toast);
+    var toast = byId('ubt-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'ubt-toast';
+      var main = document.querySelector('.ubt-main');
+      if (main) main.prepend(toast);
     }
+    toast.className   = 'ubt-toast ubt-toast--' + (type === 'err' ? 'err' : 'ok');
+    toast.textContent = msg;
     toast.style.display = 'block';
-    clearTimeout(toast._timeout);
-    toast._timeout = setTimeout(() => { toast.style.display = 'none'; }, 5000);
-  }
-
-  // ── Form save feedback ────────────────────────────────────────────────────
-  function attachFormFeedback(formId, successMsg) {
-    const form = document.getElementById(formId);
-    if (!form) return;
-    form.addEventListener('submit', () => {
-      // Let the native POST happen; PHP returns the page with the toast.
-      // This is intentional: forms use standard POST for config persistence.
-    });
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function() { toast.style.display = 'none'; }, 5000);
   }
 
   // ── Init ──────────────────────────────────────────────────────────────────
   function init() {
-    // ── Tool selector ─────────────────────────────────────────────────────
-    const toolSel = el.toolSelect();
+    var toolSel = byId('ubt-tool-select');
     if (toolSel) {
-      // Show panel for whatever tool is currently selected (set by PHP)
       switchPanel(toolSel.value);
-
-      toolSel.addEventListener('change', () => {
-        switchPanel(toolSel.value);
-      });
+      toolSel.addEventListener('change', function() { switchPanel(toolSel.value); });
     }
 
-    // ── Run buttons ───────────────────────────────────────────────────────
-    document.querySelectorAll('[data-mode]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        triggerRun(btn.dataset.mode);
-      });
+    all('[data-mode]').forEach(function(btn) {
+      btn.addEventListener('click', function() { triggerRun(btn.dataset.mode); });
     });
 
-    // ── Stop buttons ──────────────────────────────────────────────────────
-    el.stopBtns().forEach(btn => {
+    all('.ubt-btn--stop').forEach(function(btn) {
       btn.addEventListener('click', triggerStop);
     });
 
-    // ── SSH test ──────────────────────────────────────────────────────────
-    const sshBtn = document.getElementById('test-ssh-btn');
-    if (sshBtn) {
-      sshBtn.addEventListener('click', triggerSSHTest);
-    }
+    var sshBtn = byId('test-ssh-btn');
+    if (sshBtn) sshBtn.addEventListener('click', triggerSSHTest);
 
-    // ── Log file selector ─────────────────────────────────────────────────
-    const logFileSel = el.logFileSelect();
-    if (logFileSel) {
-      logFileSel.addEventListener('change', () => {
-        const val = logFileSel.value;
-        if (val === 'live') {
-          clearLog();
-          appendLog('Idle — run a backup to see output here.', 'info');
-        } else {
-          fetchArchivedLog(val);
-        }
+    var logSel = byId('ubt-log-file-select');
+    if (logSel) {
+      logSel.addEventListener('change', function() {
+        var v = logSel.value;
+        if (v === 'live') { clearLog(); appendLog('Idle \u2014 run a backup to see output here.', 'info'); }
+        else fetchArchivedLog(v);
       });
     }
 
-    // ── Log controls ──────────────────────────────────────────────────────
-    el.logRefresh()?.addEventListener('click', () => {
-      const sel = el.logFileSelect();
-      if (sel && sel.value !== 'live') {
-        fetchArchivedLog(sel.value);
-      }
-    });
+    var refreshBtn = byId('ubt-log-refresh');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', function() {
+        var sel = byId('ubt-log-file-select');
+        if (sel && sel.value !== 'live') fetchArchivedLog(sel.value);
+      });
+    }
 
-    el.logClear()?.addEventListener('click', clearLog);
+    var clearBtn = byId('ubt-log-clear');
+    if (clearBtn) clearBtn.addEventListener('click', clearLog);
 
-    // ── Log scroll lock (disable auto-scroll if user scrolls up) ─────────
-    el.logArea()?.addEventListener('scroll', function () {
-      const area = this;
-      state.logScrollLock = area.scrollTop + area.clientHeight >= area.scrollHeight - 20;
-    });
+    var logArea = byId('ubt-log-area');
+    if (logArea) {
+      logArea.addEventListener('scroll', function() {
+        state.logScrollLock = logArea.scrollTop + logArea.clientHeight >= logArea.scrollHeight - 20;
+      });
+    }
 
-    // ── Check for an already-running process on page load ─────────────────
-    checkInitialStatus();
-  }
-
-  function checkInitialStatus() {
-    fetch(API.status)
-      .then(r => r.json())
-      .then(data => {
+    // Resume if already running when page loads
+    get('status')
+      .then(function(data) {
         if (data.running) {
           state.currentTool = data.mode || state.currentTool;
           setRunState('RUNNING');
           startLogStream();
-          appendLog('Resuming log for running backup: ' + data.mode, 'info');
+          appendLog('Resuming log for: ' + data.mode, 'info');
         }
       })
-      .catch(() => {});
+      .catch(function() {});
   }
 
-  // ── Public surface ────────────────────────────────────────────────────────
-  return { init, state };
+  return { init: init };
 
 })();
 
